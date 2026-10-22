@@ -242,7 +242,7 @@ test("idempotency at request and business-reference layers, budget and game acce
     f.tokens.operator,
     "POST",
     "/v1/games/game-a/credentials",
-    { scopes: ["budget"] },
+    { label: "예산 조회 전용", scopes: ["budget"] },
     200,
   );
   const list = await f.call(
@@ -250,7 +250,25 @@ test("idempotency at request and business-reference layers, budget and game acce
     "GET",
     "/v1/games/game-a/credentials",
   );
-  assert.ok(list.credentials.some((c: any) => c.id === issued.credentialId));
+  assert.equal(issued.label, "예산 조회 전용");
+  assert.equal(
+    list.credentials.find((c: any) => c.id === issued.credentialId).label,
+    "예산 조회 전용",
+  );
+  await f.call(
+    f.tokens.operator,
+    "POST",
+    "/v1/games/game-a/credentials",
+    { scopes: ["budget"] },
+    422,
+  );
+  await f.call(
+    f.tokens.operator,
+    "POST",
+    "/v1/games/game-a/credentials",
+    { label: "   ", scopes: ["budget"] },
+    422,
+  );
   assert.ok(list.credentials.every((c: any) => !c.token && !c.token_hash));
   await f.call(issued.token, "GET", "/v1/games/game-a/rewards", undefined, 403);
   await f.call(
@@ -261,6 +279,18 @@ test("idempotency at request and business-reference layers, budget and game acce
     200,
   );
   await f.call(issued.token, "GET", "/v1/games/game-a/budget", undefined, 401);
+  // A revoked key is deleted rather than listed as revoked.
+  assert.ok(
+    !(
+      await f.call(f.tokens.operator, "GET", "/v1/games/game-a/credentials")
+    ).credentials.some((c: any) => c.id === issued.credentialId),
+  );
+  assert.ok(
+    !f.store.get(
+      "SELECT 1 FROM game_credentials WHERE id=?",
+      issued.credentialId,
+    ),
+  );
 });
 
 test("forged payment, altered amount/domain, no signature, replay, and permit frontrun", async (t) => {
@@ -1444,7 +1474,7 @@ test("a wrapped contract RPC outage keeps its operation and reservation retryabl
   );
 });
 
-test("operator registration publishes a metadata-driven catalog only after contract finality and survives restart", async (t) => {
+test("operator registration publishes a metadata-driven catalog once the contract registration is in a block and survives restart", async (t) => {
   const f = await fixture(t);
   const body = {
     gameId: "puzzle-world",
@@ -1483,18 +1513,12 @@ test("operator registration publishes a metadata-driven catalog only after contr
     ).status,
     "INCLUDED",
   );
-  assert.equal((await catalog()).games.length, 2);
+  // Publication follows inclusion; finality can lag tens of minutes on Saigon.
+  assert.equal((await catalog()).games.length, 3);
   assert.equal(
     (await f.call(f.tokens.operator, "GET", "/v1/game-registrations"))
       .registrations[0].status,
-    "REGISTERING",
-  );
-  await f.call(
-    f.tokens.operator,
-    "POST",
-    `/v1/games/${body.gameId}/credentials`,
-    { scopes: ["rewards"] },
-    409,
+    "APPROVED",
   );
   await f.call(
     f.tokens.admin,
@@ -1541,7 +1565,7 @@ test("operator registration publishes a metadata-driven catalog only after contr
     f.tokens.operator,
     "POST",
     `/v1/games/${body.gameId}/credentials`,
-    { scopes: ["budget"] },
+    { label: "운영 서버", scopes: ["budget"] },
     200,
   );
   assert.equal(

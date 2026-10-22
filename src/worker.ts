@@ -77,11 +77,33 @@ export class Worker {
   reserved(deployment: string, gameId: string): bigint {
     return this.store
       .all(
-        "SELECT reservation FROM operations WHERE deployment_id=? AND game_id=?",
+        "SELECT reservation FROM operations WHERE deployment_id=? AND game_id=? AND kind!='allocate'",
         deployment,
         gameId,
       )
       .reduce((sum, row) => sum + BigInt(row.reservation), 0n);
+  }
+  // Allocations already in a block but newer than the finalized snapshot: the
+  // budget can use them right away instead of waiting ~24 min for finality.
+  incoming(deployment: string, gameId: string, snapshotBlock: string): bigint {
+    return this.store
+      .all(
+        "SELECT o.reservation FROM operations o JOIN transaction_attempts t ON t.operation_id=o.id AND t.status='INCLUDED' WHERE o.deployment_id=? AND o.game_id=? AND o.kind='allocate' AND o.status='INCLUDED' AND CAST(t.block_number AS INTEGER) > CAST(? AS INTEGER)",
+        deployment,
+        gameId,
+        snapshotBlock,
+      )
+      .reduce((sum, row) => sum - BigInt(row.reservation), 0n);
+  }
+  // A successful allocation in a block is recorded as a negative reservation
+  // (incoming budget); a reorg clears it until the replay lands again.
+  markAllocation(op: Operation, included: boolean) {
+    if (op.kind !== "allocate") return;
+    this.store.run(
+      "UPDATE operations SET reservation=? WHERE id=? AND status NOT IN ('FINALIZED','FAILED')",
+      included ? (-BigInt(JSON.parse(op.payload)[2])).toString() : "0",
+      op.id,
+    );
   }
   async refreshBudget(deployment: string, gameId: string, block?: any) {
     const a = this.adapter(deployment);
@@ -287,6 +309,8 @@ export class Worker {
         "SUBMITTED",
         attempt.id,
       );
+      this.publishRegistration(op, false);
+      this.markAllocation(op, false);
       try {
         await a.broadcastTransaction(attempt.raw);
       } catch (e: any) {
@@ -327,6 +351,10 @@ export class Worker {
       "INCLUDED",
       op.id,
     );
+    if (receipt.status === "success") {
+      this.publishRegistration(op, true);
+      this.markAllocation(op, true);
+    }
     const finalized = await a.finalBlock();
     if (receipt.blockNumber > finalized.number) return;
     const canonical = await a.publicClient.getBlock({
@@ -338,6 +366,8 @@ export class Worker {
         "RECONCILING",
         op.id,
       );
+      this.publishRegistration(op, false);
+      this.markAllocation(op, false);
       return;
     }
     const success =
@@ -429,6 +459,15 @@ export class Worker {
             args[2] ? 1 : 0,
             op.game_id,
           );
+        // An approval published on inclusion is withdrawn if it finally failed.
+        if (
+          !success &&
+          this.store.get(
+            "SELECT 1 FROM game_registrations WHERE operation_id=?",
+            op.id,
+          )
+        )
+          this.store.run("UPDATE games SET active=0 WHERE id=?", op.game_id);
       }
       this.store.event(
         op.game_id,
@@ -436,6 +475,30 @@ export class Worker {
         op.resource_id,
         { operationId: op.id, error: error ?? null },
         `operation:${op.id}:${success}`,
+      );
+    });
+  }
+  // Game approvals are published as soon as the registration is in a block:
+  // listing a game moves no money, and Saigon finality can lag tens of minutes.
+  // A reorg withdraws the listing until the same signed transaction is back in.
+  publishRegistration(op: Operation, included: boolean) {
+    if (op.kind !== "registerGame") return;
+    const registration = this.store.get(
+      "SELECT id FROM game_registrations WHERE operation_id=?",
+      op.id,
+    );
+    if (!registration || !JSON.parse(op.payload)[2]) return;
+    this.store.transaction(() => {
+      this.store.run(
+        "UPDATE game_registrations SET status=? WHERE id=? AND status=?",
+        included ? "APPROVED" : "REGISTERING",
+        registration.id,
+        included ? "REGISTERING" : "APPROVED",
+      );
+      this.store.run(
+        "UPDATE games SET active=? WHERE id=?",
+        included ? 1 : 0,
+        op.game_id,
       );
     });
   }

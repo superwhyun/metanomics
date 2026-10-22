@@ -1,5 +1,6 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { formatEther, getAddress, keccak256, parseEther, toHex } from "viem";
+import { openTableRow, renderTable } from "./table.js";
 import {
   WalletDiscovery,
   assertWalletSession,
@@ -228,6 +229,7 @@ let me: any,
   issuance: any,
   latestOverview: any;
 let refreshBusy = false;
+let operatorRegistrations: any[] = [];
 let catalogGames: any[] = [];
 const walletDiscovery = new WalletDiscovery(window);
 let walletProvider: WalletProvider | undefined;
@@ -730,13 +732,53 @@ async function refreshOperator() {
     api("/game-registrations"),
   ]);
   const games = owned.games;
-  $("#operator-registrations").innerHTML =
-    submitted.registrations
-      .map(
-        (r: any) =>
-          `<div class="registration-row"><div><strong>${esc(r.name)}</strong><small>${esc(r.gameId)}</small><p>${esc(r.reviewNote ?? r.error ?? (r.status === "PENDING" ? "관리자 검토를 기다리고 있습니다." : r.status === "REGISTERING" ? "계약 등록이 확정되면 이용자에게 공개됩니다." : r.status === "APPROVED" ? "등록이 승인됐습니다. 활성 상태인 게임은 이용자에게 공개됩니다." : "정보를 수정해 같은 게임 ID로 다시 신청할 수 있습니다."))}</p></div>${pill(r.status)}</div>`,
-      )
-      .join("") || '<p class="muted">아직 등록 신청이 없습니다.</p>';
+  operatorRegistrations = submitted.registrations;
+  renderTable<any>($("#operator-registrations"), {
+    rows: submitted.registrations,
+    key: (r) => r.registrationId,
+    searchPlaceholder: "게임 이름·ID 검색",
+    searchText: (r) => `${r.name} ${r.gameId}`,
+    filters: [
+      { label: "전체", match: () => true },
+      { label: "검토 대기", match: byStatus("PENDING", "REGISTERING") },
+      { label: "승인", match: byStatus("APPROVED") },
+      { label: "반려·실패", match: byStatus("REJECTED", "FAILED") },
+    ],
+    columns: [
+      {
+        label: "게임",
+        cell: (r) =>
+          `<strong>${esc(r.name)}</strong><small>${esc(r.gameId)}</small>`,
+      },
+      { label: "신청일", cell: (r) => day(r.submittedAt), className: "nowrap" },
+      { label: "상태", cell: (r) => pill(r.status) },
+    ],
+    detail: (r) =>
+      detailList([
+        [
+          "안내",
+          esc(
+            r.status === "PENDING"
+              ? "관리자 검토를 기다리고 있습니다."
+              : r.status === "REGISTERING"
+                ? "계약 등록이 확정되면 이용자에게 공개됩니다."
+                : r.status === "APPROVED"
+                  ? "승인됐습니다. 내 게임 운영에서 관리하세요."
+                  : r.status === "REJECTED"
+                    ? "내용을 보완해 [다시 신청]하세요. 같은 게임 ID로 신청됩니다."
+                    : "관리자가 계약 등록을 다시 시도합니다.",
+          ),
+        ],
+        ["반려 사유", esc(r.reviewNote ?? "")],
+        ["오류", esc(r.error ?? "")],
+        ["소개", esc(r.description ?? "")],
+      ]),
+    actions: (r) =>
+      r.status === "REJECTED"
+        ? `<button type="button" class="small" data-resubmit="${esc(r.registrationId)}">다시 신청</button>`
+        : "",
+    empty: "아직 등록 신청이 없습니다.",
+  });
   // Budget reads round-trip to the chain RPC (~2s each), so cards render from the
   // local records first and the budget figures are filled in once all games answer.
   const budgetsRequest = Promise.all(
@@ -767,7 +809,7 @@ async function refreshOperator() {
     views
       .map(({ game, actions, payments, rewards, credentials }) => {
         const liveCredentials = credentials.filter((c: any) => !c.revoked);
-        return `<article class="panel operator-game"><header class="operator-game-head"><div><span class="eyebrow">${esc(game.id)}</span><h2>${esc(game.name)}</h2></div>${pill(game.active ? "ACTIVE" : "INACTIVE")}</header><div class="mini-stats"><div><strong class="loading" data-budget-available="${esc(game.id)}">확인 중</strong><span>사용 가능 예산 CGC</span></div><div><strong class="loading" data-budget-reserved="${esc(game.id)}">확인 중</strong><span>지급·인출 대기</span></div><div><strong class="${payments.length ? "warn" : ""}">${payments.length}</strong><span>미완료 결제</span></div></div><div class="operator-game-body"><section class="op-block"><h3><span class="op-num">1</span>보상 예산</h3><p class="muted">이용자 보상은 이 예산에서 지급됩니다. 예치·인출은 승인 지갑으로 서명합니다.</p><form class="operator-form" data-budget-form="${esc(game.id)}"><label>금액 (CGC)<input name="amount" value="1.000000" required></label><label>작업<select name="kind"><option value="deposits">추가 예치</option><option value="withdrawals">예산 인출</option></select></label><button type="submit" class="primary">지갑으로 승인</button></form></section><section class="op-block"><h3><span class="op-num">2</span>API 연동 ${liveCredentials.length ? `<span class="pill">사용 중 ${liveCredentials.length}</span>` : '<span class="pill pending">미발급</span>'}</h3><p class="muted">게임 서버가 계정 연결·보상·결제를 요청할 때 사용하는 자격증명입니다.</p><button data-credential="${esc(game.id)}" class="${liveCredentials.length ? "" : "primary"}">API 자격증명 발급 ↗</button><div id="credential-${esc(game.id)}"></div>${credentials.map((c: any) => `<div class="activity-row"><div><small>${esc(c.id)} · ${esc(c.scopes.join(", "))}</small></div>${c.revoked ? '<span class="muted">폐기됨</span>' : `<button data-revoke-existing="${esc(c.id)}" data-game="${esc(game.id)}" class="quiet">폐기</button>`}</div>`).join("")}</section></div><details class="op-history"${payments.length ? " open" : ""}><summary>최근 내역 · 미완료 결제 ${payments.length}건</summary><div class="op-history-grid"><div><h3>미완료 결제</h3>${payments.map((p: any) => `<div class="activity-row"><div><strong>${esc(p.item.name)}</strong><small>${esc(p.paymentId)}</small></div>${pill(p.status)}</div>`).join("") || '<p class="muted">미완료 결제가 없습니다.</p>'}</div><div><h3>보상 지급 결과</h3>${
+        return `<article class="panel operator-game"><header class="operator-game-head"><div><span class="eyebrow">${esc(game.id)}</span><h2>${esc(game.name)}</h2></div>${pill(game.active ? "ACTIVE" : "INACTIVE")}</header><div class="mini-stats"><div><strong class="loading" data-budget-available="${esc(game.id)}">확인 중</strong><span>사용 가능 예산 CGC</span></div><div><strong class="loading" data-budget-reserved="${esc(game.id)}">확인 중</strong><span>지급·인출 대기</span></div><div><strong class="${payments.length ? "warn" : ""}">${payments.length}</strong><span>미완료 결제</span></div></div><div class="operator-game-body"><section class="op-block"><h3><span class="op-num">1</span>보상 예산</h3><p class="muted">이용자 보상은 이 예산에서 지급됩니다. 예치·인출은 승인 지갑으로 서명합니다.</p><form class="operator-form" data-budget-form="${esc(game.id)}"><label>금액 (CGC)<input name="amount" value="1.000000" required></label><label>작업<select name="kind"><option value="deposits">추가 예치</option><option value="withdrawals">예산 인출</option></select></label><button type="submit" class="primary">지갑으로 승인</button></form></section><section class="op-block"><h3><span class="op-num">2</span>API 연동 ${liveCredentials.length ? `<span class="pill">사용 중 ${liveCredentials.length}</span>` : '<span class="pill pending">미발급</span>'}</h3><p class="muted">게임 서버가 계정 연결·보상·결제를 요청할 때 사용하는 자격증명입니다.</p><p class="doc-links"><a href="${INTEGRATION_GUIDE_URL}" target="_blank" rel="noopener">연동 가이드 ↗</a><a href="/docs" target="_blank" rel="noopener">API 레퍼런스 ↗</a></p><button data-credential="${esc(game.id)}" class="${liveCredentials.length ? "" : "primary"}">API 자격증명 발급 ↗</button><div id="credential-${esc(game.id)}"></div>${credentials.map((c: any) => `<div class="activity-row"><div><strong>${esc(c.label || "이름 없음")}</strong><small>${c.createdAt ? `${day(c.createdAt)} 발급 · ` : ""}${esc(c.scopes.join(", "))}</small></div><button data-revoke-existing="${esc(c.id)}" data-game="${esc(game.id)}" class="quiet">폐기</button></div>`).join("")}</section></div><details class="op-history"${payments.length ? " open" : ""}><summary>최근 내역 · 미완료 결제 ${payments.length}건</summary><div class="op-history-grid"><div><h3>미완료 결제</h3>${payments.map((p: any) => `<div class="activity-row"><div><strong>${esc(p.item.name)}</strong><small>${esc(p.paymentId)}</small></div>${pill(p.status)}</div>`).join("") || '<p class="muted">미완료 결제가 없습니다.</p>'}</div><div><h3>보상 지급 결과</h3>${
           rewards
             .slice(0, 5)
             .map(
@@ -791,14 +833,22 @@ async function refreshOperator() {
     .querySelectorAll<HTMLButtonElement>("[data-revoke-existing]")
     .forEach(
       (button) =>
-        (button.onclick = () =>
+        (button.onclick = () => {
+          // Revocation deletes the key, so the first click only asks again.
+          if (!button.dataset.armed) {
+            button.dataset.armed = "1";
+            button.textContent = "정말 폐기";
+            button.classList.add("danger");
+            return;
+          }
           void api(
             `/games/${button.dataset.game}/credentials/${button.dataset.revokeExisting}`,
             undefined,
             "DELETE",
           )
             .then(() => refreshOperator())
-            .catch((e) => toast(e.message, true))),
+            .catch((e) => toast(e.message, true));
+        }),
     );
   document.querySelectorAll<HTMLFormElement>("[data-budget-form]").forEach(
     (form) =>
@@ -810,23 +860,26 @@ async function refreshOperator() {
   document.querySelectorAll<HTMLButtonElement>("[data-credential]").forEach(
     (button) =>
       (button.onclick = () => {
-        void api(`/games/${button.dataset.credential}/credentials`, {
-          scopes: ["links", "rewards", "payments", "events", "budget"],
-        })
-          .then((r) => {
-            const root = $(`#credential-${button.dataset.credential}`);
-            root.innerHTML = `<p class="muted">이 자격증명은 한 번만 표시됩니다. 게임 서버에 보관하세요.</p><pre class="credential-output"></pre><button data-revoke="${esc(r.credentialId)}">이 자격증명 폐기</button>`;
-            root.querySelector("pre")!.textContent = r.token;
-            root.querySelector("button")!.onclick = () =>
-              void api(
-                `/games/${button.dataset.credential}/credentials/${r.credentialId}`,
-                undefined,
-                "DELETE",
-              ).then(() => {
-                root.textContent = "자격증명이 폐기됐습니다.";
-              });
+        const gameId = button.dataset.credential!;
+        const root = $(`#credential-${gameId}`);
+        root.innerHTML = `<form class="credential-form"><label>키 이름<input name="label" maxlength="60" required placeholder="예: 운영 서버, 스테이징, 테스트용"></label><button type="submit" class="primary">발급</button><button type="button" class="quiet" data-cancel>취소</button></form>`;
+        const form = root.querySelector("form")!;
+        form.querySelector<HTMLInputElement>("input")!.focus();
+        form.querySelector<HTMLButtonElement>("[data-cancel]")!.onclick =
+          () => {
+            root.innerHTML = "";
+          };
+        form.onsubmit = (e) => {
+          e.preventDefault();
+          const label = new FormData(form).get("label")!.toString().trim();
+          if (!label) return toast("키 이름을 입력하세요.", true);
+          void api(`/games/${gameId}/credentials`, {
+            label,
+            scopes: ["links", "rewards", "payments", "events", "budget"],
           })
-          .catch((e) => toast(e.message, true));
+            .then((r) => showIssuedCredential(root, gameId, r))
+            .catch((e) => toast(e.message, true));
+        };
       }),
   );
   const fillBudgets = (text: (gameId: string, key: string) => string) =>
@@ -976,6 +1029,21 @@ const REWARD_GAS_WEI = parseEther("0.002");
 const PURCHASE_GAS_WEI = parseEther("0.0082");
 const FAUCET_URL = "https://faucet.roninchain.com/";
 const EXPLORER_URL = "https://saigon-explorer.roninchain.com";
+const INTEGRATION_GUIDE_URL =
+  "https://github.com/superwhyun/metanomics/blob/main/docs/GAME_INTEGRATION.md";
+// The secret is only returned once; the list afterwards shows the label alone.
+function showIssuedCredential(root: HTMLElement, gameId: string, r: any) {
+  root.innerHTML = `<p class="muted"><strong>${esc(r.label)}</strong> 자격증명입니다. 한 번만 표시되니 게임 서버에 보관하세요.</p><pre class="credential-output"></pre><button data-revoke="${esc(r.credentialId)}">이 자격증명 폐기</button>`;
+  root.querySelector("pre")!.textContent = r.token;
+  root.querySelector("button")!.onclick = () =>
+    void api(
+      `/games/${gameId}/credentials/${r.credentialId}`,
+      undefined,
+      "DELETE",
+    ).then(() => {
+      root.textContent = "자격증명이 폐기됐습니다.";
+    });
+}
 // The admin wallet only signs occasional allocations and issuances (~0.003 RON each).
 const ADMIN_GAS_LOW_WEI = parseEther("0.1");
 interface GasWallet {
@@ -1087,59 +1155,277 @@ function renderIssuance(data: any) {
       )
       .join("") || '<p class="muted">아직 추가 발행 기록이 없습니다.</p>';
 }
+const day = (ms: number) =>
+  ms ? new Date(ms).toLocaleDateString("ko-KR") : "—";
+const when = (ms: number) =>
+  ms
+    ? new Date(ms).toLocaleString("ko-KR", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "—";
+const byStatus =
+  (...statuses: string[]) =>
+  (row: any) =>
+    statuses.includes(row.status);
+const rejectForm = (kind: string, id: string) =>
+  `<div class="reject-form"><input data-keep="reject-${esc(kind)}-${esc(id)}" data-reject-input="${esc(kind)}:${esc(id)}" maxlength="500" placeholder="반려 사유 (신청자에게 보입니다)"><button type="button" class="danger" data-reject-confirm="${esc(kind)}:${esc(id)}">반려 확정</button></div>`;
+const detailList = (items: [string, string][]) =>
+  `<dl class="detail-list">${items
+    .filter(([, value]) => value)
+    .map(([label, value]) => `<dt>${esc(label)}</dt><dd>${value}</dd>`)
+    .join("")}</dl>`;
+const OPERATION_LABELS: Record<string, string> = {
+  allocate: "예산 배분",
+  reward: "보상 지급",
+  pay: "결제",
+  claimDelivery: "지급 시작",
+  fulfill: "지급 완료",
+  refund: "환불",
+  resolve: "공동 승인 환불",
+  budgetAction: "예치·인출",
+  registerGame: "게임 체인 기록",
+  mint: "CGC 발행",
+  approve: "발행분 충전 승인",
+  fundReserve: "보유분 입금",
+  fundRelayer: "중계 지갑 충전",
+};
 function renderOperatorApplications(applications: any[]) {
-  const notes = new Map(
-    Array.from(
-      document.querySelectorAll<HTMLInputElement>("[data-application-note]"),
-    ).map((input) => [input.dataset.applicationNote, input.value]),
+  const rows = [...applications].sort(
+    (a, b) =>
+      Number(b.status === "PENDING") - Number(a.status === "PENDING") ||
+      b.createdAt - a.createdAt,
   );
-  $("#admin-operator-applications").innerHTML =
-    applications
-      .map(
-        (o) =>
-          `<article class="registration-row"><div><div class="actions"><strong>${esc(o.displayName)}</strong>${applicationPill(o.status)}</div><small>${esc(o.contact)} · 계정 ${esc(o.accountId)} · ${new Date(o.createdAt).toLocaleString("ko-KR")}</small><p>${esc(o.introduction)}</p><small>승인 지갑 <code>${esc(o.wallet)}</code></small>${o.reviewNote ? `<p class="muted">${esc(o.reviewNote)}</p>` : ""}${o.status === "PENDING" ? `<div class="review-actions"><button class="primary" data-approve-application="${esc(o.applicationId)}">승인하고 운영자로 전환</button><label>반려 사유<input data-application-note="${esc(o.applicationId)}" maxlength="500" value="${esc(notes.get(o.applicationId) ?? "")}" placeholder="보완할 내용을 알려주세요"></label><button data-reject-application="${esc(o.applicationId)}">반려</button></div>` : ""}</div></article>`,
-      )
-      .join("") || '<p class="muted">운영자 신청이 없습니다.</p>';
-  document
-    .querySelectorAll<HTMLButtonElement>("[data-approve-application]")
-    .forEach(
-      (button) =>
-        (button.onclick = () =>
-          void api(
-            `/operator-applications/${button.dataset.approveApplication}/approvals`,
-            {},
-          )
-            .then(() => {
-              toast(
-                "운영자로 전환했습니다. 이제 게임 등록을 신청할 수 있습니다.",
-              );
-              return refreshAdmin();
-            })
-            .catch((e) => toast(e.message, true))),
-    );
-  document
-    .querySelectorAll<HTMLButtonElement>("[data-reject-application]")
-    .forEach(
-      (button) =>
-        (button.onclick = () => {
-          const reason = document
-            .querySelector<HTMLInputElement>(
-              `[data-application-note="${button.dataset.rejectApplication}"]`,
-            )!
-            .value.trim();
-          if (!reason) {
-            toast("반려 사유를 입력하세요.", true);
-            return;
-          }
-          void api(
-            `/operator-applications/${button.dataset.rejectApplication}/rejections`,
-            { reason },
-          )
-            .then(() => refreshAdmin())
-            .catch((e) => toast(e.message, true));
-        }),
-    );
+  renderTable<any>($("#admin-operator-applications"), {
+    rows,
+    key: (o) => o.applicationId,
+    searchPlaceholder: "이름·연락처·지갑 검색",
+    searchText: (o) =>
+      `${o.displayName} ${o.contact} ${o.wallet} ${o.accountId} ${o.introduction}`,
+    filters: [
+      { label: "전체", match: () => true },
+      { label: "검토 대기", match: byStatus("PENDING") },
+      { label: "승인", match: byStatus("APPROVED") },
+      { label: "반려", match: byStatus("REJECTED") },
+    ],
+    columns: [
+      {
+        label: "신청자",
+        cell: (o) => `<strong>${esc(o.displayName)}</strong>`,
+      },
+      { label: "연락처", cell: (o) => esc(o.contact) },
+      {
+        label: "승인 지갑",
+        cell: (o) => `<code>${esc(short(o.wallet))}</code>`,
+      },
+      { label: "신청일", cell: (o) => day(o.createdAt), className: "nowrap" },
+      { label: "상태", cell: (o) => applicationPill(o.status) },
+    ],
+    detail: (o) =>
+      detailList([
+        ["소개", esc(o.introduction)],
+        ["승인 지갑", `<code>${esc(o.wallet)}</code>`],
+        ["계정", esc(o.accountId)],
+        ["반려 사유", esc(o.reviewNote ?? "")],
+      ]) +
+      (o.status === "PENDING"
+        ? rejectForm("application", o.applicationId)
+        : ""),
+    actions: (o) =>
+      o.status === "PENDING"
+        ? `<button type="button" class="primary small" data-approve-application="${esc(o.applicationId)}">승인</button><button type="button" class="small" data-reject-open="application:${esc(o.applicationId)}">반려</button>`
+        : "",
+    empty: "운영자 신청이 없습니다.",
+  });
   return applications.filter((o) => o.status === "PENDING").length;
+}
+function renderRegistrations(registrations: any[]) {
+  const rows = [...registrations].sort(
+    (a, b) =>
+      Number(["PENDING", "FAILED"].includes(b.status)) -
+        Number(["PENDING", "FAILED"].includes(a.status)) ||
+      (b.submittedAt ?? 0) - (a.submittedAt ?? 0),
+  );
+  renderTable<any>($("#admin-registrations"), {
+    rows,
+    key: (r) => r.registrationId,
+    searchPlaceholder: "게임 이름·ID·운영자 검색",
+    searchText: (r) =>
+      `${r.name} ${r.gameId} ${r.operatorId} ${r.category} ${r.playUrl}`,
+    filters: [
+      { label: "전체", match: () => true },
+      { label: "검토 대기", match: byStatus("PENDING") },
+      { label: "등록 중", match: byStatus("REGISTERING") },
+      { label: "승인", match: byStatus("APPROVED") },
+      { label: "반려", match: byStatus("REJECTED") },
+      { label: "실패", match: byStatus("FAILED") },
+    ],
+    columns: [
+      {
+        label: "게임",
+        cell: (r) =>
+          `<strong>${esc(r.name)}</strong><small>${esc(r.gameId)}</small>`,
+      },
+      { label: "운영자", cell: (r) => esc(r.operatorId) },
+      { label: "장르", cell: (r) => esc(r.category) },
+      { label: "신청일", cell: (r) => day(r.submittedAt), className: "nowrap" },
+      { label: "상태", cell: (r) => pill(r.status) },
+    ],
+    detail: (r) =>
+      detailList([
+        ["소개", esc(r.description)],
+        [
+          "실행 주소",
+          `<a class="text-link" href="${esc(r.playUrl)}" target="_blank" rel="noopener noreferrer">${esc(r.playUrl)} ↗</a>`,
+        ],
+        ["반려 사유", esc(r.reviewNote ?? "")],
+        ["오류", esc(r.error ?? "")],
+      ]) +
+      (r.status === "PENDING"
+        ? rejectForm("registration", r.registrationId)
+        : ""),
+    actions: (r) =>
+      r.status === "PENDING"
+        ? `<button type="button" class="primary small" data-approve-registration="${esc(r.registrationId)}">승인</button><button type="button" class="small" data-reject-open="registration:${esc(r.registrationId)}">반려</button>`
+        : r.status === "FAILED"
+          ? `<button type="button" class="small" data-approve-registration="${esc(r.registrationId)}">재시도</button>`
+          : "",
+    empty: "게임 등록 신청이 없습니다.",
+  });
+}
+function renderAdminGames(data: any) {
+  renderTable<any>($("#admin-games"), {
+    rows: data.games,
+    key: (g) => g.id,
+    searchPlaceholder: "게임 이름·ID·운영자 검색",
+    searchText: (g) => `${g.name} ${g.id} ${g.operator_id}`,
+    filters: [
+      { label: "전체", match: () => true },
+      { label: "포털 켜짐", match: (g) => !!g.active },
+      { label: "포털 꺼짐", match: (g) => !g.active },
+    ],
+    columns: [
+      {
+        label: "게임",
+        cell: (g) =>
+          `<strong>${esc(g.name)}</strong><small>${esc(g.id)}</small>`,
+      },
+      { label: "운영자", cell: (g) => esc(g.operator_id) },
+      {
+        label: "포털",
+        cell: (g) =>
+          pill(g.active ? "ACTIVE" : "INACTIVE", g.active ? "켜짐" : "꺼짐"),
+      },
+      {
+        label: "체인",
+        cell: (g) =>
+          g.chainPending
+            ? pill("PENDING", "처리 중")
+            : pill(
+                g.chainActive ? "ACTIVE" : "INACTIVE",
+                g.chainActive ? "켜짐" : "중지",
+              ),
+      },
+    ],
+    actions: (g) => {
+      const pending = data.registrations.find(
+        (r: any) => r.gameId === g.id && r.status !== "APPROVED",
+      );
+      if (pending) return pill(pending.status);
+      const toggle = `<button type="button" class="small" data-game-toggle="${esc(g.id)}" data-active="${g.active ? "1" : "0"}"${!g.active && !g.chainActive ? ' disabled title="계약에서 중지된 게임입니다. [체인 재개]가 확정된 뒤 켤 수 있습니다."' : ""}>${g.active ? "끄기" : "켜기"}</button>`;
+      const chain = g.chainPending
+        ? ""
+        : `<button type="button" class="small quiet" data-chain-state="${esc(g.id)}" data-active="${g.chainActive ? "0" : "1"}" data-name="${esc(g.name)}">${g.chainActive ? "체인 중지" : "체인 재개"}</button>`;
+      const remove = g.active
+        ? ""
+        : `<button type="button" class="small danger" data-game-delete="${esc(g.id)}" data-name="${esc(g.name)}">삭제</button>`;
+      return toggle + chain + remove;
+    },
+    empty: "등록된 게임이 없습니다.",
+  });
+}
+function renderOperations(data: any) {
+  const running = (o: any) => !["FINALIZED", "FAILED"].includes(o.status);
+  renderTable<any>($("#operations"), {
+    rows: data.operations,
+    key: (o) => o.id,
+    searchPlaceholder: "작업·게임·오류 검색",
+    searchText: (o) =>
+      `${o.kind} ${OPERATION_LABELS[o.kind] ?? ""} ${o.game_id ?? ""} ${o.error ?? ""} ${o.id}`,
+    filters: [
+      { label: "전체", match: () => true },
+      { label: "진행 중", match: running },
+      { label: "실패", match: byStatus("FAILED") },
+      { label: "완료", match: byStatus("FINALIZED") },
+    ],
+    columns: [
+      { label: "시각", cell: (o) => when(o.created_at), className: "nowrap" },
+      {
+        label: "작업",
+        cell: (o) =>
+          `<strong>${esc(OPERATION_LABELS[o.kind] ?? o.kind)}</strong>`,
+      },
+      { label: "게임", cell: (o) => esc(o.game_id ?? "네트워크") },
+      {
+        label: "상태",
+        // An allocation in a block is already spendable; finality only follows.
+        cell: (o) =>
+          o.kind === "allocate" && o.status === "INCLUDED"
+            ? pill("INCLUDED", "반영됨 · 확정 중")
+            : pill(o.status),
+      },
+    ],
+    detail: (o) =>
+      detailList([
+        ["오류", esc(o.error ?? "")],
+        ["작업 ID", `<code>${esc(o.id)}</code>`],
+        ["대상", `<code>${esc(o.resource_id)}</code>`],
+      ]),
+    actions: (o) =>
+      ["SUBMITTED", "RECONCILING", "PREPARED"].includes(o.status)
+        ? `<button type="button" class="small" data-replace="${esc(o.id)}">수수료 대체</button>`
+        : "",
+    empty: "아직 작업이 없습니다.",
+  });
+  renderTable<any>($("#stalled-payments"), {
+    rows: data.payments.filter((p: any) =>
+      ["PAID", "DELIVERY_CLAIMED", "PROCESSING"].includes(p.status),
+    ),
+    key: (p) => p.id,
+    searchPlaceholder: "게임·결제 ID 검색",
+    searchText: (p) => `${p.game_id} ${p.id}`,
+    columns: [
+      { label: "생성", cell: (p) => when(p.created_at), className: "nowrap" },
+      { label: "게임", cell: (p) => esc(p.game_id) },
+      { label: "결제 ID", cell: (p) => `<code>${esc(p.id)}</code>` },
+      { label: "상태", cell: (p) => pill(p.status) },
+    ],
+    empty: "지연된 결제가 없습니다.",
+  });
+}
+function renderAudit(data: any) {
+  const pretty = (payload: string) => {
+    try {
+      return JSON.stringify(JSON.parse(payload), null, 2);
+    } catch {
+      return payload;
+    }
+  };
+  renderTable<any>($("#audit"), {
+    rows: data.audit,
+    key: (a) => a.id,
+    searchPlaceholder: "작업·실행자·내용 검색",
+    searchText: (a) => `${a.action} ${a.actor_id} ${a.payload}`,
+    columns: [
+      { label: "시각", cell: (a) => when(a.created_at), className: "nowrap" },
+      { label: "작업", cell: (a) => `<strong>${esc(a.action)}</strong>` },
+      { label: "실행자", cell: (a) => esc(a.actor_id) },
+    ],
+    detail: (a) => `<pre class="audit-payload">${esc(pretty(a.payload))}</pre>`,
+    empty: "관리 기록이 없습니다.",
+  });
 }
 async function refreshAdmin() {
   const [data, applications] = await Promise.all([
@@ -1150,57 +1436,7 @@ async function refreshAdmin() {
   const pendingApplications = renderOperatorApplications(
     applications.applications,
   );
-  const pendingNotes = new Map(
-    Array.from(
-      document.querySelectorAll<HTMLInputElement>("[data-rejection-note]"),
-    ).map((input) => [input.dataset.rejectionNote, input.value]),
-  );
-  $("#admin-registrations").innerHTML =
-    data.registrations
-      .map(
-        (r: any) =>
-          `<article class="registration-row"><div><div class="actions"><strong>${esc(r.name)}</strong>${pill(r.status)}</div><small>${esc(r.gameId)} · 운영자 ${esc(r.operatorId)} · ${esc(r.category)}</small><p>${esc(r.description)}</p><a class="text-link" href="${esc(r.playUrl)}" target="_blank" rel="noopener noreferrer">${esc(r.playUrl)} ↗</a>${r.error || r.reviewNote ? `<p class="muted">${esc(r.error ?? r.reviewNote)}</p>` : ""}${["PENDING", "FAILED"].includes(r.status) ? `<div class="review-actions"><button class="primary" data-approve-registration="${esc(r.registrationId)}">${r.status === "FAILED" ? "계약 등록 재시도" : "승인하고 공개"}</button>${r.status === "PENDING" ? `<label>반려 사유<input data-rejection-note="${esc(r.registrationId)}" maxlength="500" value="${esc(pendingNotes.get(r.registrationId) ?? "")}" placeholder="수정할 내용을 알려주세요"></label><button data-reject-registration="${esc(r.registrationId)}">반려</button>` : ""}</div>` : ""}</div></article>`,
-      )
-      .join("") || '<p class="muted">등록 신청이 없습니다.</p>';
-  document
-    .querySelectorAll<HTMLButtonElement>("[data-approve-registration]")
-    .forEach(
-      (button) =>
-        (button.onclick = () =>
-          void api(
-            `/game-registrations/${button.dataset.approveRegistration}/approvals`,
-            {},
-          )
-            .then(() => {
-              toast(
-                "승인을 접수했습니다. 계약 등록 확정 후 이용자에게 공개됩니다.",
-              );
-              return refreshAdmin();
-            })
-            .catch((e) => toast(e.message, true))),
-    );
-  document
-    .querySelectorAll<HTMLButtonElement>("[data-reject-registration]")
-    .forEach(
-      (button) =>
-        (button.onclick = () => {
-          const reason = (
-            document.querySelector(
-              `[data-rejection-note="${button.dataset.rejectRegistration}"]`,
-            ) as HTMLInputElement
-          ).value.trim();
-          if (!reason) {
-            toast("반려 사유를 입력하세요.", true);
-            return;
-          }
-          void api(
-            `/game-registrations/${button.dataset.rejectRegistration}/rejections`,
-            { reason },
-          )
-            .then(() => refreshAdmin())
-            .catch((e) => toast(e.message, true));
-        }),
-    );
+  renderRegistrations(data.registrations);
   const select = $("#allocation-game-select") as HTMLSelectElement;
   const options = data.games
     .filter((g: any) => g.active)
@@ -1283,114 +1519,9 @@ async function refreshAdmin() {
         `<div class="stat"><span>${label}</span><strong>${value}</strong></div>`,
     )
     .join("");
-  $("#operations").innerHTML =
-    data.operations
-      .map(
-        (o: any) =>
-          `<div class="activity-row"><div><strong>${esc(o.kind)} · ${esc(o.game_id ?? "네트워크")}</strong><small>${esc(o.error ?? o.id)}</small></div><div class="actions">${pill(o.status)}${["SUBMITTED", "RECONCILING", "PREPARED"].includes(o.status) ? `<button data-replace="${esc(o.id)}">수수료 대체</button>` : ""}</div></div>`,
-      )
-      .join("") || '<p class="muted">아직 작업이 없습니다.</p>';
-  $("#stalled-payments").innerHTML =
-    data.payments
-      .filter((p: any) =>
-        ["PAID", "DELIVERY_CLAIMED", "PROCESSING"].includes(p.status),
-      )
-      .map(
-        (p: any) =>
-          `<div class="activity-row"><div><strong>${esc(p.game_id)}</strong><small>${esc(p.id)}</small></div>${pill(p.status)}</div>`,
-      )
-      .join("") || '<p class="muted">지연된 결제가 없습니다.</p>';
-  $("#audit").innerHTML = data.audit
-    .map(
-      (a: any) =>
-        `<div class="activity-row"><div><strong>${esc(a.action)}</strong><small>${esc(a.actor_id)} · ${esc(a.payload)}</small></div><small>${new Date(a.created_at).toLocaleString("ko-KR")}</small></div>`,
-    )
-    .join("");
-  $("#admin-games").innerHTML =
-    data.games
-      .map((g: any) => {
-        const pending = data.registrations.find(
-          (r: any) => r.gameId === g.id && r.status !== "APPROVED",
-        );
-        const chain = g.chainPending
-          ? pill("PENDING", "체인 처리 중")
-          : pill(
-              g.chainActive ? "ACTIVE" : "INACTIVE",
-              g.chainActive ? "체인 켜짐" : "체인 중지",
-            );
-        const chainButton = g.chainPending
-          ? ""
-          : `<button class="quiet" data-chain-state="${esc(g.id)}" data-active="${g.chainActive ? "0" : "1"}" data-name="${esc(g.name)}">${g.chainActive ? "체인에 중지 기록" : "체인에 재개 기록"}</button>`;
-        const actions = pending
-          ? pill(pending.status)
-          : `${pill(g.active ? "ACTIVE" : "INACTIVE", g.active ? "포털 켜짐" : "포털 꺼짐")}${chain}<button data-game-toggle="${esc(g.id)}" data-active="${g.active ? "1" : "0"}"${!g.active && !g.chainActive ? ' disabled title="계약에서 중지된 게임입니다. [체인에 재개 기록]이 확정된 뒤 켤 수 있습니다."' : ""}>${g.active ? "끄기" : "켜기"}</button>${chainButton}${g.active ? "" : `<button class="danger" data-game-delete="${esc(g.id)}" data-name="${esc(g.name)}">삭제</button>`}`;
-        return `<div class="activity-row"><div><strong>${esc(g.name)}</strong><small>${esc(g.id)} · 운영자 ${esc(g.operator_id)}</small></div><div class="actions">${actions}</div></div>`;
-      })
-      .join("") || '<p class="muted">등록된 게임이 없습니다.</p>';
-  document.querySelectorAll<HTMLButtonElement>("[data-game-toggle]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        const turnOn = b.dataset.active !== "1";
-        void api(`/games/${b.dataset.gameToggle}`, { active: turnOn }, "PATCH")
-          .then(() => {
-            toast(
-              turnOn
-                ? "게임을 켰습니다."
-                : "게임을 껐습니다. 새 결제와 보상이 막힙니다.",
-            );
-            return refreshAdmin();
-          })
-          .catch((e) => toast(e.message, true));
-      }),
-  );
-  document.querySelectorAll<HTMLButtonElement>("[data-chain-state]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        const resume = b.dataset.active === "1";
-        if (
-          !confirm(
-            resume
-              ? `"${b.dataset.name}"의 재개를 블록체인 계약에 기록할까요?\n\n관리자 지갑이 거래 1건(약 0.002 RON)을 보냅니다. 포털 상태는 바뀌지 않으니 확정 후 [켜기]로 켜세요.`
-              : `"${b.dataset.name}"의 중지를 블록체인 계약에 기록할까요?\n\n확정되면 서버와 관계없이 계약이 새 결제·보상·배분을 거부하고, 포털도 꺼집니다. 되돌리려면 재개 기록 거래가 필요합니다. 관리자 지갑이 거래 1건(약 0.002 RON)을 보냅니다.`,
-          )
-        )
-          return;
-        void api(`/games/${b.dataset.chainState}/chain-state`, {
-          active: resume,
-        })
-          .then(() => {
-            toast(
-              "블록체인 기록을 접수했습니다. 블록에 실리고 확정되면 상태가 바뀝니다.",
-            );
-            return refreshAdmin();
-          })
-          .catch((e) => toast(e.message, true));
-      }),
-  );
-  document.querySelectorAll<HTMLButtonElement>("[data-game-delete]").forEach(
-    (b) =>
-      (b.onclick = () => {
-        if (
-          !confirm(
-            `"${b.dataset.name}" 게임을 포털에서 삭제할까요?\n\n게임 정보, 자격증명, 이용자 계정 연결이 지워지고 되돌릴 수 없습니다. 결제·보상 기록과 블록체인 장부의 남은 예산은 그대로 남습니다.`,
-          )
-        )
-          return;
-        void api(`/games/${b.dataset.gameDelete}`, undefined, "DELETE")
-          .then(() => {
-            toast("게임을 삭제했습니다.");
-            return refreshAdmin();
-          })
-          .catch((e) => toast(e.message, true));
-      }),
-  );
-  document.querySelectorAll<HTMLButtonElement>("[data-replace]").forEach(
-    (b) =>
-      (b.onclick = () =>
-        void api(`/operations/${b.dataset.replace}/replacements`, {})
-          .then(() => toast("같은 업무의 수수료 대체 거래를 준비했습니다."))
-          .catch((e) => toast(e.message, true))),
-  );
+  renderOperations(data);
+  renderAudit(data);
+  renderAdminGames(data);
 }
 async function mount() {
   if (!token) return;
@@ -1655,19 +1786,24 @@ on("#allocation-form", "submit", (e) => {
   allocation = {
     ...Object.fromEntries(new FormData(e.currentTarget)),
     assetId: asset.assetId,
-    allocationType: "weekly",
   };
   const select = $<HTMLSelectElement>("#allocation-game-select");
   const gameName = select.selectedOptions[0]?.textContent ?? allocation.gameId;
   $("#allocation-details").innerHTML =
-    `<div class="activity-row"><span>게임</span><strong>${esc(gameName)}</strong></div><div class="activity-row"><span>기간</span><strong>${esc(allocation.period)}</strong></div><div class="activity-row"><span>배분 코인</span><strong>${esc(allocation.amount)} CGC</strong></div>`;
+    `<div class="activity-row"><span>게임</span><strong>${esc(gameName)}</strong></div><div class="activity-row"><span>배분 코인</span><strong>${esc(allocation.amount)} CGC</strong></div>`;
   ($("#allocation-dialog") as HTMLDialogElement).showModal();
 });
 on("#cancel-allocation", "click", () =>
   ($("#allocation-dialog") as HTMLDialogElement).close(),
 );
-on("#confirm-allocation", "click", async () => {
-  const r = await api("/allocations", allocation);
+on("#confirm-allocation", "click", async (e) => {
+  // Each allocation is new now, so a double click must not send two.
+  const button = e.currentTarget as HTMLButtonElement;
+  if (button.disabled) return;
+  button.disabled = true;
+  const r = await api("/allocations", allocation).finally(() => {
+    button.disabled = false;
+  });
   ($("#allocation-dialog") as HTMLDialogElement).close();
   toast("예산 배분을 접수했습니다.");
   await waitOperation(r.operationId);
@@ -1729,6 +1865,103 @@ on("#funding-form", "submit", async (e) => {
   await refreshAdmin();
   await waitOperation(r.operationId);
   await refreshAdmin();
+});
+// Admin list actions are delegated so they keep working after a table redraws.
+const REVIEW_TABLES: Record<string, [string, string]> = {
+  application: ["#admin-operator-applications", "/operator-applications"],
+  registration: ["#admin-registrations", "/game-registrations"],
+};
+$("#admin-view").addEventListener("click", (e) => {
+  const button = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
+  if (!button || button.disabled) return;
+  const d = button.dataset;
+  const run = (work: () => Promise<unknown>) => {
+    button.disabled = true;
+    void work()
+      .catch((error) => toast(walletErrorMessage(error), true))
+      .finally(() => {
+        button.disabled = false;
+      });
+  };
+  if (d.approveApplication)
+    run(async () => {
+      await api(`/operator-applications/${d.approveApplication}/approvals`, {});
+      toast("운영자로 전환했습니다. 이제 게임 등록을 신청할 수 있습니다.");
+      await refreshAdmin();
+    });
+  else if (d.rejectOpen) {
+    const [kind, id] = d.rejectOpen.split(":");
+    openTableRow($(REVIEW_TABLES[kind][0]), id);
+    document
+      .querySelector<HTMLInputElement>(`[data-reject-input="${d.rejectOpen}"]`)
+      ?.focus();
+  } else if (d.rejectConfirm) {
+    const [kind, id] = d.rejectConfirm.split(":");
+    const input = document.querySelector<HTMLInputElement>(
+      `[data-reject-input="${d.rejectConfirm}"]`,
+    )!;
+    const reason = input.value.trim();
+    if (!reason) {
+      toast("반려 사유를 입력하세요.", true);
+      input.focus();
+      return;
+    }
+    run(async () => {
+      await api(`${REVIEW_TABLES[kind][1]}/${id}/rejections`, { reason });
+      input.value = "";
+      toast("반려했습니다. 신청자가 사유를 보고 다시 신청할 수 있습니다.");
+      await refreshAdmin();
+    });
+  } else if (d.approveRegistration)
+    run(async () => {
+      await api(`/game-registrations/${d.approveRegistration}/approvals`, {});
+      toast("승인을 접수했습니다. 계약 등록이 확정되면 이용자에게 공개됩니다.");
+      await refreshAdmin();
+    });
+  else if (d.gameToggle) {
+    const turnOn = d.active !== "1";
+    run(async () => {
+      await api(`/games/${d.gameToggle}`, { active: turnOn }, "PATCH");
+      toast(
+        turnOn
+          ? "게임을 켰습니다."
+          : "게임을 껐습니다. 새 결제와 보상이 막힙니다.",
+      );
+      await refreshAdmin();
+    });
+  } else if (d.chainState) {
+    const resume = d.active === "1";
+    if (
+      !confirm(
+        resume
+          ? `"${d.name}"의 재개를 블록체인 계약에 기록할까요?\n\n관리자 지갑이 거래 1건(약 0.002 RON)을 보냅니다. 포털 상태는 바뀌지 않으니 확정 후 [켜기]로 켜세요.`
+          : `"${d.name}"의 중지를 블록체인 계약에 기록할까요?\n\n확정되면 서버와 관계없이 계약이 새 결제·보상·배분을 거부하고, 포털도 꺼집니다. 되돌리려면 재개 기록 거래가 필요합니다. 관리자 지갑이 거래 1건(약 0.002 RON)을 보냅니다.`,
+      )
+    )
+      return;
+    run(async () => {
+      await api(`/games/${d.chainState}/chain-state`, { active: resume });
+      toast("블록체인 기록을 접수했습니다. 확정되면 상태가 바뀝니다.");
+      await refreshAdmin();
+    });
+  } else if (d.gameDelete) {
+    if (
+      !confirm(
+        `"${d.name}" 게임을 포털에서 삭제할까요?\n\n게임 정보, 자격증명, 이용자 계정 연결이 지워지고 되돌릴 수 없습니다. 결제·보상 기록과 블록체인 장부의 남은 예산은 그대로 남습니다.`,
+      )
+    )
+      return;
+    run(async () => {
+      await api(`/games/${d.gameDelete}`, undefined, "DELETE");
+      toast("게임을 삭제했습니다.");
+      await refreshAdmin();
+    });
+  } else if (d.replace)
+    run(async () => {
+      await api(`/operations/${d.replace}/replacements`, {});
+      toast("같은 업무의 수수료 대체 거래를 준비했습니다.");
+      await refreshAdmin();
+    });
 });
 on("#operator-application-form", "submit", async (e) => {
   e.preventDefault();
@@ -1793,16 +2026,40 @@ on("#confirm-issuance", "click", async () => {
   await waitOperation(r.operationId);
   await refreshAdmin();
 });
+$("#operator-view").addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+  if (target.closest("[data-cancel-resubmit]")) {
+    $<HTMLFormElement>("#game-registration-form").reset();
+    show("#registration-resubmit", false);
+    return;
+  }
+  const button = target.closest<HTMLButtonElement>("[data-resubmit]");
+  if (!button) return;
+  const r = operatorRegistrations.find(
+    (x) => x.registrationId === button.dataset.resubmit,
+  );
+  if (!r) return;
+  const form = $<HTMLFormElement>("#game-registration-form");
+  for (const name of ["gameId", "name", "category", "description", "playUrl"])
+    (form.elements.namedItem(name) as HTMLInputElement).value = r[name] ?? "";
+  $("#registration-resubmit").innerHTML =
+    `<strong>${esc(r.gameId)}</strong> 다시 신청 중 · 반려 사유: ${esc(r.reviewNote ?? "—")} <button type="button" class="quiet small" data-cancel-resubmit>새 신청으로</button>`;
+  show("#registration-resubmit", true);
+  form
+    .closest(".registration-panel")!
+    .scrollIntoView({ behavior: "smooth", block: "start" });
+});
 on("#game-registration-form", "submit", async (e) => {
   e.preventDefault();
   const form = e.currentTarget as HTMLFormElement;
-  const r = await api(
-    "/game-registrations",
-    Object.fromEntries(new FormData(form)),
-  );
+  const fields = Object.fromEntries(new FormData(form));
+  // The server issues the game ID; only a resubmission names its rejected one.
+  if (!fields.gameId) delete fields.gameId;
+  const r = await api("/game-registrations", fields);
   $("#registration-feedback").textContent =
-    `${r.name} 등록 신청을 접수했습니다.`;
+    `${r.name} 등록 신청을 접수했습니다 (게임 ID ${r.gameId}).`;
   form.reset();
+  show("#registration-resubmit", false);
   await refreshOperator();
   toast(
     "등록 신청을 접수했습니다. 승인과 계약 등록 확정 후 이용자에게 공개됩니다.",
@@ -1872,9 +2129,6 @@ async function boot() {
   $("#chain-badge").textContent =
     d?.finality === "local" ? "LOCAL TESTNET" : "SAIGON TESTNET";
   show("#create-wallet", d?.finality === "local");
-  ($("input[name=period]") as HTMLInputElement).value = new Date()
-    .toISOString()
-    .slice(0, 10);
   if (token) await mount();
 }
 void boot().catch((e) => {

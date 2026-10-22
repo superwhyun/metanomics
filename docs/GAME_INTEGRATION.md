@@ -2,6 +2,46 @@
 
 대상: 독립된 게임 서버에 Metanomic의 계정 연결·공통 코인 보상·아이템 결제를 추가하는 개발자와 구현 에이전트. 현재 구현의 HTTP API를 기준으로 설명한다.
 
+## 0. 구현 에이전트용 요약
+
+이 문서만 읽고 게임 서버 연동을 구현할 수 있도록 작성했다. 세부 스키마는 실행 중인 서버의 `/docs`(Swagger UI)와 `/openapi.json`이 기준이다.
+
+**운영자에게 받아야 할 값 세 가지**
+
+| 값          | 어디서 확인하나                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| API 주소    | Metanomic 서버 주소 + `/v1` (예: `http://localhost:3300/v1`)                                      |
+| 게임 ID     | 서버가 등록 신청 때 자동으로 만든다(`game-` + 16진수 8자리). 운영자 화면 게임 카드 제목 위에 표시 |
+| 게임 API 키 | 운영자 화면 **② API 연동 → API 자격증명 발급**. 키 이름을 붙여 발급하며 비밀값은 한 번만 표시     |
+
+**구현 순서**: ① 계정 연결(§4) → ② 보상 지급(§5) → ③ 주문·결제(§6) → ④ 아이템 지급·완료 통지(§7) → ⑤ 폴링·재시작 복구(§8). 보상만 쓰는 게임은 ①②⑤만 구현한다.
+
+**게임 서버가 호출하는 API** (모두 `Authorization: Bearer <게임 API 키>`, 변경 요청은 `Idempotency-Key` 필수)
+
+| 메서드·경로                                    | 필요한 범위 | 용도                                    |
+| ---------------------------------------------- | ----------- | --------------------------------------- |
+| `POST /player-links/exchange`                  | `links`     | 이용자가 입력한 연결 코드 → `playerId`  |
+| `GET /games/{gameId}/budget`                   | `budget`    | 사용 가능 예산 조회                     |
+| `POST /games/{gameId}/rewards`                 | `rewards`   | 보상 지급 요청 (202)                    |
+| `GET /games/{gameId}/rewards?rewardRef=`       | `rewards`   | 보상 조회·응답 유실 복구                |
+| `POST /games/{gameId}/payments`                | `payments`  | 주문(결제) 생성                         |
+| `GET /games/{gameId}/payments?status=&cursor=` | `payments`  | 결제 목록·재시작 복구                   |
+| `GET /payments/{paymentId}`                    | `payments`  | 결제 단건 조회                          |
+| `POST /payments/{paymentId}/delivery-claims`   | `payments`  | 아이템 지급 시작 (`PAID`일 때)          |
+| `POST /payments/{paymentId}/fulfillments`      | `payments`  | 아이템 지급 완료 통지                   |
+| `POST /payments/{paymentId}/refunds`           | `payments`  | 지급 시작 전 환불                       |
+| `GET /games/{gameId}/events?cursor=`           | `events`    | 상태 변경 이벤트 폴링                   |
+| `GET /operations/{operationId}`                | (게임 키)   | 비동기 작업 상태 (`FINALIZED`/`FAILED`) |
+| `GET /assets`                                  | 공개        | `assetId`, `deploymentId` 확인          |
+
+**공통 규칙**
+
+- 오류 응답은 항상 `{ "error": { "code": "...", "message": "..." } }`이다. 분기는 `code`로 한다(§9).
+- 금액은 소수점 6자리 이하 양수 **문자열**(`"10.000000"`)이다. 부동소수점으로 계산하지 않는다.
+- 블록체인 기록이 필요한 요청은 `202`와 `operationId`를 돌려준다. 접수일 뿐 완료가 아니다.
+- 같은 `Idempotency-Key` + 같은 본문은 같은 결과를 돌려준다. 재시도에는 키와 본문을 그대로 쓴다.
+- API 키는 게임 서버에만 둔다. 브라우저 번들·로그·응답에 넣지 않는다.
+
 ## 1. 시작할 때 읽을 파일과 구현 범위
 
 | 자료                         | 용도                                                   |
@@ -20,13 +60,13 @@
 ## 2. 선행 설정과 인증 주체
 
 1. [README의 등록 절차](../README.md#운영자의-게임-등록과-이용자-공개)에 따라 운영자가 게임을 신청하고 관리자가 승인한다. 계약 확정 후 활성 게임이 된다.
-2. 운영자가 자격증명을 발급한다. 전체 연동에는 `links`, `rewards`, `payments`, `events`, `budget` 범위가 필요하다. 기능 일부만 구현한다면 필요한 범위만 부여한다.
+2. 운영자가 자격증명을 발급한다. 포털은 `links`, `rewards`, `payments`, `events`, `budget` 전체 범위로 발급하고, API(`POST /games/{gameId}/credentials`)로는 필요한 범위만 줄 수 있다. 발급 때 용도를 기억할 **키 이름**(`label`, 예: 운영 서버·스테이징)이 필수다. 키는 여러 개를 동시에 쓸 수 있으므로 새 키로 교체한 뒤 이전 키를 폐기하면 무중단으로 바꿀 수 있다. 폐기한 키는 즉시 막히고 목록에서 삭제된다(감사 기록은 남는다).
 3. 관리자가 예산을 배분하거나 운영자가 토큰을 예치한다. 신규 게임 예산은 0이다.
 4. 게임 서버에 아래 설정을 추가한다. 이는 **연동할 게임에서 사용할 설정 예시**이며 Metanomic 실행기의 기존 환경 변수 이름을 바꾸는 지시가 아니다.
 
 ```dotenv
 METANOMIC_API_URL=http://localhost:3300/v1
-METANOMIC_GAME_ID=my-game
+METANOMIC_GAME_ID=game-1a2b3c4d
 METANOMIC_GAME_KEY=<운영자가 발급한 게임 자격증명>
 METANOMIC_ASSET_ID=common-game-credit
 ```
@@ -104,7 +144,7 @@ async function network(path, { body, key } = {}) {
 
 1. 공통 로그인 화면에서 위의 지갑 로그인 흐름으로 이용자 `token`을 받는다.
 2. 이용자 인증으로 공개 `GET /assets`의 배포 정보에 맞춰 지갑을 연결한다. `POST /wallet-links/challenges`에 `{"address":"0x지갑주소","deploymentId":"조회한 배포 ID"}`를 보내고, 받은 `message`를 지갑으로 서명한 뒤 `POST /wallet-links`에 `{"challengeId":"반환된 값","signature":"0x서명"}`를 제출한다. 지갑 소유 확인 메시지는 5분 동안 유효하며 한 번만 소비된다.
-3. 이용자 인증으로 `POST /player-links/codes`에 `{"gameId":"my-game"}`를 보낸다. 응답은 `code`, `gameId`, `expiresIn: 300`이다.
+3. 이용자 인증으로 `POST /player-links/codes`에 `{"gameId":"game-1a2b3c4d"}`를 보낸다. 응답은 `code`, `gameId`, `expiresIn: 300`이다.
 4. 게임에 로그인한 이용자가 이 코드를 게임 서버의 연결 API로 제출한다. 게임 서버는 **자체 세션에서** `gamePlayerId`를 결정해 다음 요청을 보낸다.
 
 ```js
@@ -247,7 +287,7 @@ CREATED → PROCESSING → PAID → DELIVERY_CLAIMED → COMPLETED
 게임 서버에서 초기에는 약 1초 간격의 단일 폴링 작업을 실행할 수 있다. 한 번의 순회가 겹치지 않도록 한다. 이벤트 조회는 최대 100건씩 반환한다.
 
 ```http
-GET /v1/games/my-game/events?cursor=0
+GET /v1/games/game-1a2b3c4d/events?cursor=0
 Authorization: Bearer <게임 자격증명>
 ```
 
@@ -256,7 +296,7 @@ Authorization: Bearer <게임 자격증명>
 시작·재시작과 주기적 복구에서는 다음 목록을 `cursor=0`부터 끝까지 조회한다.
 
 ```http
-GET /v1/games/my-game/payments?status=PAID,DELIVERY_CLAIMED&cursor=0&limit=50
+GET /v1/games/game-1a2b3c4d/payments?status=PAID,DELIVERY_CLAIMED&cursor=0&limit=50
 Authorization: Bearer <게임 자격증명>
 ```
 
@@ -279,7 +319,7 @@ Authorization: Bearer <게임 자격증명>
 
 작업은 `QUEUED → PREPARED → SUBMITTED → INCLUDED → FINALIZED`다. `RECONCILING`은 결과 확인 중이며 실패가 아니다. `FAILED`만 확실한 실패다. 접수·포함 상태에서 완료로 표시하지 않는다.
 
-Saigon은 실제 검증에서 최종 확정까지 약 20~30분을 관측했다. 이는 보장 시간이 아니며 현재 중계기는 같은 서명 지갑의 이전 작업이 확정될 때까지 다음 제출을 기다린다. 짧은 화면 대기 종료를 결제 실패로 바꾸지 않고 영속 작업에서 추적한다. 로컬 확인과 테스트넷 확인 결과를 구분한다.
+Saigon은 실제 검증에서 최종 확정까지 약 20~30분을 관측했다. 이는 보장 시간이 아니다. 중계기는 이전 거래가 블록에 포함되면(수 초) 다음 거래를 보내므로 요청이 줄지어 밀리지는 않지만, 보상·결제의 업무 결과(`FINALIZED`, `PAID`, `COMPLETED`)는 최종 확정 후에 반영된다. 예외로 관리자 예산 배분은 블록 포함 즉시 사용 가능 예산에 더해진다. 게임 UI는 "접수됨 → 처리 중 → 완료"를 구분하고, 짧은 화면 대기 종료를 실패로 바꾸지 않고 영속 작업에서 추적한다. 로컬 확인과 테스트넷 확인 결과를 구분한다.
 
 ## 10. 연동 완료 기준
 

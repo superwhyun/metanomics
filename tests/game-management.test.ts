@@ -218,3 +218,111 @@ test("recording a stop or resume on chain is a separate action and never switche
   );
   assert.equal((await overviewGame()).active, 1);
 });
+
+test("the server assigns the game ID when an operator registers a game, and a rejected one is resubmitted under it", async (t) => {
+  const f = await fixture(t);
+  const body = {
+    name: "Auto ID Game",
+    category: "퍼즐",
+    description: "자동으로 ID를 받는 게임",
+    playUrl: "https://auto.example/play",
+  };
+  const first = await f.call(
+    f.tokens.operator,
+    "POST",
+    "/v1/game-registrations",
+    body,
+  );
+  assert.match(first.gameId, /^game-[0-9a-f]{8}$/);
+  const second = await f.call(
+    f.tokens.operator,
+    "POST",
+    "/v1/game-registrations",
+    {
+      ...body,
+      name: "Another",
+    },
+  );
+  assert.notEqual(second.gameId, first.gameId);
+  await f.call(
+    f.tokens.admin,
+    "POST",
+    `/v1/game-registrations/${first.registrationId}/rejections`,
+    { reason: "소개를 보완하세요." },
+    200,
+  );
+  const resubmitted = await f.call(
+    f.tokens.operator,
+    "POST",
+    "/v1/game-registrations",
+    {
+      ...body,
+      gameId: first.gameId,
+      description: "보완한 소개",
+    },
+  );
+  assert.equal(resubmitted.gameId, first.gameId);
+  assert.equal(resubmitted.registrationId, first.registrationId);
+  assert.equal(resubmitted.status, "PENDING");
+});
+
+test("a registration published on inclusion is withdrawn by a reorg and published again when replayed", async (t) => {
+  const f = await fixture(t);
+  const catalog = async () =>
+    (await f.call(null, "GET", "/v1/games")).games.map((g: any) => g.id);
+  const registration = await f.call(
+    f.tokens.operator,
+    "POST",
+    "/v1/game-registrations",
+    {
+      name: "Reorg Game",
+      category: "퍼즐",
+      description: "재구성 테스트",
+      playUrl: "https://reorg.example",
+    },
+  );
+  const anchor = await f.adapter.finalBlock();
+  const snapshot = await f.chain.client.request({
+    method: "evm_snapshot",
+    params: [],
+  } as any);
+  const finalBlock = f.adapter.finalBlock.bind(f.adapter);
+  f.adapter.finalBlock = async () => anchor;
+  await f.call(
+    f.tokens.admin,
+    "POST",
+    `/v1/game-registrations/${registration.registrationId}/approvals`,
+    {},
+  );
+  await f.worker.tick();
+  assert.ok((await catalog()).includes(registration.gameId));
+  await f.chain.client.request({
+    method: "evm_revert",
+    params: [snapshot],
+  } as any);
+  // Seen right after the reorg, before the replay lands, the game is withdrawn.
+  const receipt = f.adapter.getTransactionStatus.bind(f.adapter);
+  f.adapter.getTransactionStatus = async () => null;
+  f.adapter.broadcastTransaction = async () => "0x" as any;
+  await f.worker.tick();
+  assert.ok(!(await catalog()).includes(registration.gameId));
+  assert.equal(
+    f.store.get(
+      "SELECT status FROM game_registrations WHERE id=?",
+      registration.registrationId,
+    ).status,
+    "REGISTERING",
+  );
+  f.adapter.getTransactionStatus = receipt;
+  delete (f.adapter as any).broadcastTransaction;
+  f.adapter.finalBlock = finalBlock;
+  await f.drain();
+  assert.ok((await catalog()).includes(registration.gameId));
+  assert.equal(
+    f.store.get(
+      "SELECT status FROM game_registrations WHERE id=?",
+      registration.registrationId,
+    ).status,
+    "APPROVED",
+  );
+});

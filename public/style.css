@@ -1072,6 +1072,32 @@ body[data-role] .primary {
 .op-block > p {
   margin: 0 0 14px;
 }
+.op-block > p.doc-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: -8px;
+  font-size: 13px;
+}
+.doc-links a {
+  color: var(--role);
+  font-weight: 600;
+  text-decoration: none;
+}
+.doc-links a:hover,
+.doc-links a:focus-visible {
+  text-decoration: underline;
+}
+.credential-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.credential-form label {
+  flex: 1 1 200px;
+}
 .op-block .operator-form {
   margin: 0;
 }
@@ -1350,4 +1376,161 @@ button.danger:hover {
 }
 button:disabled[title] {
   cursor: not-allowed;
+}
+/* ---- Data tables: search, filter chips, expandable rows ---- */
+.table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  margin: 4px 0 12px;
+}
+.table-search {
+  flex: 0 1 280px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.table-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 20px;
+  font-size: 12px;
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+}
+.filter-chip span {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+.filter-chip:hover {
+  transform: none;
+  color: var(--text);
+}
+.filter-chip.selected {
+  border-color: var(--role);
+  color: var(--role);
+  background: var(--role-soft);
+}
+.table-wrap {
+  overflow-x: auto;
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.data-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+.data-table td strong {
+  font-weight: 600;
+}
+.data-table td small {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+}
+.data-table tr.expandable {
+  cursor: pointer;
+}
+.data-table tr.expandable:hover td {
+  background: #ffffff05;
+}
+.data-table tr.open td {
+  background: #ffffff07;
+  border-bottom-color: transparent;
+}
+.data-table .detail-row td {
+  background: #ffffff07;
+  padding: 4px 10px 16px;
+}
+.data-table .nowrap {
+  white-space: nowrap;
+}
+.row-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.row-actions button + button {
+  margin-left: 6px;
+}
+.table-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 24px 10px !important;
+}
+button.small {
+  padding: 5px 11px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+.detail-list {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 0;
+}
+.detail-list dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.detail-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+.reject-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  max-width: 560px;
+}
+.reject-form input {
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.audit-payload {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.resubmit-note {
+  padding: 10px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+}
+@media (max-width: 800px) {
+  .table-search {
+    flex-basis: 100%;
+  }
+  .detail-list {
+    grid-template-columns: 1fr;
+  }
+}
+/* Keep anchored panels clear of the sticky tab bar. */
+#workspace .panel {
+  scroll-margin-top: 72px;
 }

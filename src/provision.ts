@@ -185,11 +185,13 @@ export function provisionStore(
     const token = opaque();
     credentials[gameId] = token;
     store.run(
-      "INSERT INTO game_credentials VALUES(?,?,?,?,0)",
+      "INSERT INTO game_credentials(id,game_id,token_hash,scopes,label,created_at) VALUES(?,?,?,?,?,?)",
       `boot-${opaque()}`,
       gameId,
       sha(token),
       json(["links", "budget", "rewards", "payments", "events"]),
+      "예제 게임 서버",
+      Date.now(),
     );
   }
   return credentials;

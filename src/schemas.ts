@@ -108,6 +108,7 @@ export const budgetSchema = open(
     assetId: text,
     deploymentId: text,
     onchain: text,
+    incoming: text,
     reserved: text,
     available: text,
     blockNumber: text,

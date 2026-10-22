@@ -49,7 +49,22 @@ export class Store {
       CREATE INDEX IF NOT EXISTS payment_recovery ON payments(game_id,status,created_at);
       CREATE INDEX IF NOT EXISTS operator_registrations ON game_registrations(operator_id,status);
     `);
+    this.addColumns("game_credentials", {
+      label: "TEXT NOT NULL DEFAULT ''",
+      created_at: "INTEGER NOT NULL DEFAULT 0",
+    });
+    // Keys revoked before revocation meant deletion.
+    this.run("DELETE FROM game_credentials WHERE revoked=1");
     this.seedDemoProfiles();
+  }
+  // Columns added after a table first shipped; older databases gain them in place.
+  addColumns(table: string, columns: Record<string, string>) {
+    const existing = new Set(
+      this.all(`PRAGMA table_info(${table})`).map((c) => c.name),
+    );
+    for (const [name, type] of Object.entries(columns))
+      if (!existing.has(name))
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
   }
   seedDemoProfiles() {
     for (const [gameId, description, category] of [

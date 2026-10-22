@@ -50,7 +50,7 @@ async function fixture(t: any) {
     "old-player",
   );
   store.run(
-    "INSERT INTO game_credentials VALUES(?,?,?,?,0)",
+    "INSERT INTO game_credentials(id,game_id,token_hash,scopes) VALUES(?,?,?,?)",
     "key",
     "game-a",
     sha("test-game-key"),

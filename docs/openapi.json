@@ -8324,7 +8324,7 @@
         }
       },
       "post": {
-        "summary": "운영자 게임 등록 신청",
+        "summary": "운영자 게임 등록 신청 (게임 ID는 서버가 발급, 반려 후 재신청 때만 지정)",
         "tags": [
           "game-registrations"
         ],
@@ -8362,7 +8362,6 @@
                   }
                 },
                 "required": [
-                  "gameId",
                   "name",
                   "description",
                   "category",
@@ -10925,6 +10924,12 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
+                  "label": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 60,
+                    "description": "용도를 기억하기 위한 이름 (예: 운영 서버, 스테이징)"
+                  },
                   "scopes": {
                     "type": "array",
                     "minItems": 1,
@@ -10942,6 +10947,7 @@
                   }
                 },
                 "required": [
+                  "label",
                   "scopes"
                 ]
               }
@@ -13986,6 +13992,9 @@
                     "onchain": {
                       "type": "string"
                     },
+                    "incoming": {
+                      "type": "string"
+                    },
                     "reserved": {
                       "type": "string"
                     },
@@ -14031,6 +14040,9 @@
                       "type": "string"
                     },
                     "onchain": {
+                      "type": "string"
+                    },
+                    "incoming": {
                       "type": "string"
                     },
                     "reserved": {
@@ -14340,7 +14352,7 @@
     },
     "/v1/allocations": {
       "post": {
-        "summary": "관리자 주간·추가 예산 배분",
+        "summary": "관리자 예산 배분",
         "tags": [
           "allocations"
         ],
@@ -14387,8 +14399,6 @@
                 },
                 "required": [
                   "gameId",
-                  "period",
-                  "allocationType",
                   "assetId",
                   "amount"
                 ]

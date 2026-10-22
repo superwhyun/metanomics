@@ -232,27 +232,14 @@
           <section class="panel registration-panel" data-tab="register">
             <div class="section-heading">
               <div>
-                <span class="eyebrow">BRING YOUR WORLD</span>
                 <h2>새 게임 등록 신청</h2>
               </div>
               <span class="pill pending">관리자 승인 후 공개</span>
             </div>
-            <p class="muted">
-              게임은 운영자의 주소에서 실행되며 보상·결제는 공통 API로
-              연동합니다. 게임 소개와 실행 주소를 등록하세요. 승인과 계약 등록이
-              확정되면 이용자의 참여 게임 목록에 자동으로 표시됩니다.
-            </p>
+            <p class="muted">게임 ID는 신청하면 자동으로 발급됩니다.</p>
+            <p id="registration-resubmit" class="resubmit-note hidden"></p>
             <form id="game-registration-form" class="registration-form">
-              <label
-                >게임 ID<input
-                  name="gameId"
-                  placeholder="my-game"
-                  pattern="[a-z0-9][a-z0-9-]{2,63}"
-                  minlength="3"
-                  maxlength="64"
-                  required
-                /><small>영문 소문자·숫자·하이픈, 3~64자</small></label
-              >
+              <input type="hidden" name="gameId" />
               <label
                 >게임 이름<input
                   name="name"
@@ -300,7 +287,7 @@
           </section>
           <section class="panel" data-tab="register">
             <h2>내 등록 신청 현황</h2>
-            <div id="operator-registrations" class="activity-list"></div>
+            <div id="operator-registrations"></div>
           </section>
         </section>
         <section id="admin-view" class="hidden">
@@ -333,18 +320,14 @@
             <div id="network-stats" class="stats-grid"></div>
           </section>
           <section class="panel" data-tab="budget">
-            <h2>주간 예산 배분</h2>
-            <p class="muted">
-              미배분 보유분에서 게임의 보상 예산으로 코인을 옮깁니다. 실행 전
-              확인 창이 표시됩니다.
-            </p>
+            <h2>예산 배분</h2>
+            <p class="muted">미배분 보유분 → 게임 보상 예산</p>
             <form id="allocation-form" class="form-grid">
               <label
                 >게임<select
                   name="gameId"
                   id="allocation-game-select"
                 ></select></label
-              ><label>기간<input name="period" type="date" required /></label
               ><label
                 >배분 코인<input
                   name="amount"
@@ -357,11 +340,7 @@
           </section>
           <section class="panel" data-tab="budget">
             <h2>CGC 추가 발행</h2>
-            <p class="muted">
-              네트워크 보유분에 발행하면 예산 배분 재원이 늘어납니다. 운영자
-              지갑에 발행하면 운영자가 자기 게임 예산에 직접 예치할 수 있습니다.
-              발행은 관리자 지갑이 서명합니다.
-            </p>
+            <p class="muted">보유분(배분 재원) 또는 운영자 지갑으로 발행</p>
             <div id="supply-meter" class="supply-meter"></div>
             <form id="issuance-form" class="form-grid">
               <label
@@ -386,45 +365,38 @@
             <div id="issuance-history" class="activity-list"></div>
           </section>
           <section class="panel" data-tab="review">
-            <h2>게임 운영자 신청 검토</h2>
-            <p class="muted">
-              승인하면 신청 계정이 운영자로 전환되고, 신청 지갑이 운영자 승인
-              지갑으로 등록됩니다.
-            </p>
-            <div id="admin-operator-applications" class="activity-list"></div>
+            <h2>게임 운영자 신청</h2>
+            <div id="admin-operator-applications"></div>
           </section>
           <section class="panel" data-tab="review">
-            <h2>게임 등록 신청 검토</h2>
-            <div id="admin-registrations" class="activity-list"></div>
+            <h2>게임 등록 신청</h2>
+            <div id="admin-registrations"></div>
           </section>
           <section class="panel" data-tab="games">
-            <h2>참여 게임 관리</h2>
-            <div id="admin-games" class="activity-list"></div>
+            <h2>참여 게임</h2>
+            <div id="admin-games"></div>
             <details class="advanced">
               <summary>운영자 신청 없이 직접 등록 (고급)</summary>
               <form id="register-form" class="form-grid">
                 <label>게임 ID<input name="gameId" required /></label
                 ><label>게임 이름<input name="name" required /></label
                 ><label
-                  >운영자 계정 ID<input
-                    name="operatorId"
-                    value="operator"
-                    required /></label
+                  >운영자 계정 ID<input name="operatorId" required /></label
                 ><button type="submit">게임 등록</button>
               </form>
             </details>
           </section>
           <section class="panel" data-tab="ops">
-            <h2>진행 중인 작업과 장애</h2>
-            <div id="operations" class="activity-list"></div>
+            <h2>블록체인 작업</h2>
+            <div id="operations"></div>
           </section>
           <section class="panel" data-tab="ops">
             <h2>지연된 결제</h2>
-            <div id="stalled-payments" class="activity-list"></div>
+            <div id="stalled-payments"></div>
           </section>
           <section class="panel" data-tab="audit">
             <h2>관리 기록</h2>
-            <div id="audit" class="activity-list"></div>
+            <div id="audit"></div>
           </section>
         </section>
         <section id="resolution-panel" class="panel hidden" data-tab="ops">

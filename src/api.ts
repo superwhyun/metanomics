@@ -325,16 +325,15 @@ export async function createApi(
   const budgetView = async (deployment: string, gameId: string) => {
     const snapshot = await worker.refreshBudget(deployment, gameId);
     const reserved = worker.reserved(deployment, gameId);
+    const incoming = worker.incoming(deployment, gameId, snapshot.block_number);
+    const usable = BigInt(snapshot.amount) + incoming;
     return {
       assetId: ASSET,
       deploymentId: deployment,
       onchain: display(snapshot.amount),
+      incoming: display(incoming),
       reserved: display(reserved),
-      available: display(
-        BigInt(snapshot.amount) > reserved
-          ? BigInt(snapshot.amount) - reserved
-          : 0n,
-      ),
+      available: display(usable > reserved ? usable - reserved : 0n),
       blockNumber: snapshot.block_number,
       blockHash: snapshot.block_hash,
       finalized: true,
@@ -348,7 +347,10 @@ export async function createApi(
     );
     requireThat(
       snapshot &&
-        BigInt(snapshot.amount) - worker.reserved(deployment, gameId) >= value,
+        BigInt(snapshot.amount) +
+          worker.incoming(deployment, gameId, snapshot.block_number) -
+          worker.reserved(deployment, gameId) >=
+          value,
       409,
       "BUDGET_EXCEEDED",
     );
@@ -599,6 +601,19 @@ export async function createApi(
     },
     true,
   );
+  const newGameId = () => {
+    for (;;) {
+      const candidate = `game-${randomBytes(4).toString("hex")}`;
+      if (
+        !store.get("SELECT 1 FROM games WHERE id=?", candidate) &&
+        !store.get(
+          "SELECT 1 FROM game_registrations WHERE game_id=?",
+          candidate,
+        )
+      )
+        return candidate;
+    }
+  };
   const applicationView = (row: any) => ({
     applicationId: row.id,
     accountId: row.account_id,
@@ -863,19 +878,28 @@ export async function createApi(
   route(
     "POST",
     "/game-registrations",
-    "운영자 게임 등록 신청",
-    object({
-      gameId: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{2,63}$" },
-      name: { type: "string", minLength: 1, maxLength: 80 },
-      ...profileFields,
-    }),
+    "운영자 게임 등록 신청 (게임 ID는 서버가 발급, 반려 후 재신청 때만 지정)",
+    object(
+      {
+        gameId: { type: "string", pattern: "^[a-z0-9][a-z0-9-]{2,63}$" },
+        name: { type: "string", minLength: 1, maxLength: 80 },
+        ...profileFields,
+      },
+      ["name", ...Object.keys(profileFields)],
+    ),
     (req, reply, p) => {
       only(p, "operator");
       requireThat(p.wallet, 422, "OPERATOR_WALLET_REQUIRED");
       const profile = profileOf(req.body);
       requireThat(profile.description, 422, "INVALID_GAME_PROFILE");
-      const payload = { ...req.body, name: req.body.name.trim(), ...profile };
       const response = idem(p, req, () => {
+        // Operators do not invent IDs; a resubmission names its rejected one.
+        const payload = {
+          ...req.body,
+          gameId: req.body.gameId ?? newGameId(),
+          name: req.body.name.trim(),
+          ...profile,
+        };
         const prior = store.get(
           "SELECT * FROM game_registrations WHERE game_id=?",
           payload.gameId,
@@ -1227,17 +1251,26 @@ export async function createApi(
     "POST",
     "/games/:gameId/credentials",
     "운영자 게임 자격증명 발급",
-    object({
-      scopes: {
-        type: "array",
-        minItems: 1,
-        uniqueItems: true,
-        items: {
+    object(
+      {
+        label: {
           type: "string",
-          enum: ["links", "rewards", "payments", "events", "budget"],
+          minLength: 1,
+          maxLength: 60,
+          description: "용도를 기억하기 위한 이름 (예: 운영 서버, 스테이징)",
+        },
+        scopes: {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: {
+            type: "string",
+            enum: ["links", "rewards", "payments", "events", "budget"],
+          },
         },
       },
-    }),
+      ["label", "scopes"],
+    ),
     (req, _reply, p) => {
       const g = game(p, req.params.gameId);
       requireThat(p.role !== "game", 403, "OPERATOR_REQUIRED");
@@ -1250,23 +1283,28 @@ export async function createApi(
         409,
         "GAME_REGISTRATION_PENDING",
       );
+      const label = req.body.label.trim();
+      requireThat(label, 422, "LABEL_REQUIRED");
       const token = opaque(),
         credentialId = id("credential");
       store.transaction(() => {
         store.run(
-          "INSERT INTO game_credentials VALUES(?,?,?,?,0)",
+          "INSERT INTO game_credentials(id,game_id,token_hash,scopes,label,created_at) VALUES(?,?,?,?,?,?)",
           credentialId,
           g.id,
           sha(token),
           json(req.body.scopes),
+          label,
+          Date.now(),
         );
         store.audit(p.id, "credential.issue", {
           gameId: g.id,
           credentialId,
+          label,
           scopes: req.body.scopes,
         });
       });
-      return { credentialId, token, scopes: req.body.scopes };
+      return { credentialId, label, token, scopes: req.body.scopes };
     },
   );
   route(
@@ -1280,10 +1318,14 @@ export async function createApi(
       return {
         credentials: store
           .all(
-            "SELECT id,scopes,revoked FROM game_credentials WHERE game_id=? ORDER BY rowid DESC",
+            "SELECT id,label,scopes,revoked,created_at FROM game_credentials WHERE game_id=? AND revoked=0 ORDER BY rowid DESC",
             req.params.gameId,
           )
-          .map((row) => ({ ...row, scopes: JSON.parse(row.scopes) })),
+          .map(({ created_at, ...row }) => ({
+            ...row,
+            scopes: JSON.parse(row.scopes),
+            createdAt: created_at,
+          })),
       };
     },
   );
@@ -1297,7 +1339,8 @@ export async function createApi(
       requireThat(p.role !== "game", 403, "OPERATOR_REQUIRED");
       store.transaction(() => {
         store.run(
-          "UPDATE game_credentials SET revoked=1 WHERE id=? AND game_id=?",
+          // A revoked key is simply forgotten; the audit log keeps the record.
+          "DELETE FROM game_credentials WHERE id=? AND game_id=?",
           req.params.credentialId,
           req.params.gameId,
         );
@@ -1548,17 +1591,19 @@ export async function createApi(
   route(
     "POST",
     "/allocations",
-    "관리자 주간·추가 예산 배분",
+    "관리자 예산 배분",
     object(
       {
         gameId: string,
+        // Optional business reference for scripted, resumable runs: one
+        // allocation per period/type/ref. Without it every request allocates.
         period: string,
         allocationType: { type: "string", enum: ["weekly", "additional"] },
         allocationRef: string,
         assetId: string,
         amount: amountSchema,
       },
-      ["gameId", "period", "allocationType", "assetId", "amount"],
+      ["gameId", "assetId", "amount"],
     ),
     async (req, reply, p) => {
       only(p, "admin");
@@ -1568,18 +1613,26 @@ export async function createApi(
       requireThat(g.active, 409, "GAME_INACTIVE");
       const value = amount(req.body.amount);
       await a.finalBlock();
-      if (req.body.allocationType === "additional")
+      const type = req.body.allocationType ?? "weekly";
+      if (type === "additional")
         requireThat(
           req.body.allocationRef,
           422,
           "ALLOCATION_REFERENCE_REQUIRED",
         );
-      const ref = `${req.body.period}:${req.body.allocationType}:${req.body.allocationType === "weekly" ? "base" : req.body.allocationRef}`;
+      requireThat(
+        req.body.period || !req.body.allocationType,
+        422,
+        "ALLOCATION_PERIOD_REQUIRED",
+      );
       const response = idem(p, req, () => {
+        const allocationId = id("allocation");
+        const ref = req.body.period
+          ? `${req.body.period}:${type}:${type === "weekly" ? "base" : req.body.allocationRef}`
+          : `once:${allocationId}`;
         const old = prior("allocations", g.id, ref, req.body);
         if (old)
           return operationResult("allocate", old.id, { allocationId: old.id });
-        const allocationId = id("allocation");
         store.run(
           "INSERT INTO allocations VALUES(?,?,?,?,?)",
           allocationId,
