@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.*
+!.env.example
+var/
+artifacts/
+public/app.js
+public/wallet-check.js
+coverage/
+*.sqlite*
+*.log
+.serena/

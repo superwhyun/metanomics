@@ -1,0 +1,44 @@
+{
+  "name": "metanomic",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "tsx scripts/dev.ts",
+    "start": "tsx scripts/dev.ts",
+    "contracts:build": "tsx scripts/compile.ts",
+    "deploy": "tsx scripts/deploy.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-concurrency=1 tests/*.test.ts",
+    "check": "npm run typecheck && npm run contracts:build && npm test",
+    "build:web": "esbuild web/app.ts web/wallet-check.ts --bundle --format=esm --outdir=public",
+    "openapi": "tsx scripts/openapi.ts",
+    "format": "prettier --write src scripts tests web public/*.html public/*.css package.json tsconfig.json README.md docs/*.md",
+    "format:check": "prettier --check src scripts tests web public/*.html public/*.css package.json tsconfig.json README.md docs/*.md"
+  },
+  "dependencies": {
+    "@fastify/static": "10.1.6",
+    "@fastify/swagger": "^9.7.0",
+    "@fastify/swagger-ui": "^6.1.2",
+    "@openzeppelin/contracts": "5.6.1",
+    "fastify": "5.12.7",
+    "viem": "2.57.7"
+  },
+  "devDependencies": {
+    "@foundry-rs/anvil": "^1.7.1",
+    "@types/node": "^22.18.0",
+    "esbuild": "^0.25.0",
+    "prettier": "^3.9.10",
+    "solc": "0.8.37",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "overrides": {
+    "solc": {
+      "tmp": "0.2.7"
+    }
+  }
+}

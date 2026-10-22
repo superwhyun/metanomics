@@ -1,0 +1,215 @@
+{
+  "runId": "smoke-470f2ed9-b1fd-4beb-a5a5-e2b7a1ce7857",
+  "deployment": {
+    "id": "saigon-v2",
+    "chainId": 202601,
+    "rpcUrl": "https://saigon-testnet.roninchain.com/rpc",
+    "token": "0x8cb7b084470ab1d945586052a586b093fc1235d0",
+    "settlement": "0x1a198d6e631b7892d204a14a1c3d7c6818093a40",
+    "admin": "0xFE579260A530002D86976221146Db4C21Fe38f31",
+    "relayer": "0xf822B6d8d8f8FA998173358c72Cd2b1Da502F3eB",
+    "fromBlock": "56528800",
+    "finality": "finalized",
+    "authorizationWindowSeconds": 3600,
+    "claimWindowSeconds": 3600
+  },
+  "startedAt": "2026-10-18T16:09:53.044Z",
+  "steps": [
+    {
+      "label": "allocate 100",
+      "elapsedMs": 419090
+    },
+    {
+      "label": "allocate 100",
+      "elapsedMs": 3376
+    },
+    {
+      "label": "reward 10",
+      "elapsedMs": 2748
+    },
+    {
+      "label": "allocate 100",
+      "elapsedMs": 4044
+    },
+    {
+      "label": "reward 10",
+      "elapsedMs": 4061
+    },
+    {
+      "label": "pay 4",
+      "elapsedMs": 942630
+    },
+    {
+      "label": "claim delivery",
+      "elapsedMs": 1151065
+    },
+    {
+      "label": "allocate 100",
+      "elapsedMs": 4180
+    },
+    {
+      "label": "reward 10",
+      "elapsedMs": 3985
+    },
+    {
+      "label": "pay 4",
+      "elapsedMs": 3932
+    },
+    {
+      "label": "claim delivery",
+      "elapsedMs": 3935
+    },
+    {
+      "label": "fulfill after game restart",
+      "elapsedMs": 505097
+    },
+    {
+      "label": "reward 1",
+      "elapsedMs": 1532863
+    }
+  ],
+  "results": {
+    "player": "7.000000",
+    "a": "90.000000",
+    "b": "3.000000",
+    "itemGrants": 1,
+    "paymentStatus": "COMPLETED",
+    "totalSupply": "1000000.000000",
+    "playerWallet": "0x84B747632a63b7b72b413343DaDB2150531b2F0c",
+    "allocationId": "allocation-1a15f508-02ce-4293-8a3c-54aa6f5b85bc",
+    "rewardId": "reward-1f2af806-2948-4ada-b0dd-a6923e083c00",
+    "paymentId": "payment-fbd71e86-8b59-49c4-9859-25ebe024b2cc",
+    "bonusId": "reward-1817a3a1-422d-4498-94db-cad933c2bdd3"
+  },
+  "before": {
+    "player": "0.000000",
+    "a": "0.000000",
+    "b": "0.000000"
+  },
+  "supplyAtDeployment": "1000000.000000",
+  "transactions": [
+    {
+      "hash": "0xf3da470662b0d3a38ea85408cca479e7930d12ad8aff114df3283d34f358e165",
+      "nonce": 14,
+      "kind": "allocate",
+      "blockNumber": "56528850",
+      "gasUsed": "108885",
+      "effectiveGasPrice": "21000000000",
+      "executionFeeWei": "2286585000000000",
+      "l1FeeWei": "134"
+    },
+    {
+      "hash": "0x14d19223d368f85351fba7b10cd57050febcea6d60c75caab42b14fd1af199fb",
+      "nonce": 0,
+      "kind": "reward",
+      "blockNumber": "56529573",
+      "gasUsed": "103226",
+      "effectiveGasPrice": "21000000000",
+      "executionFeeWei": "2167746000000000",
+      "l1FeeWei": "159"
+    },
+    {
+      "hash": "0x0b53e0410c8dac124448c361fe17a8fc5afcae5c5ac344f87c3d9b18009d92b5",
+      "nonce": 1,
+      "kind": "pay",
+      "blockNumber": "56543866",
+      "gasUsed": "276026",
+      "effectiveGasPrice": "21000000000",
+      "executionFeeWei": "5796546000000000",
+      "l1FeeWei": "399"
+    },
+    {
+      "hash": "0xd7a1249595271b213eaac42e932ebd7b8baeb824e0fa1752a71698afb608847f",
+      "nonce": 2,
+      "kind": "claimDelivery",
+      "blockNumber": "56544550",
+      "gasUsed": "40406",
+      "effectiveGasPrice": "21000000000",
+      "executionFeeWei": "848526000000000",
+      "l1FeeWei": "113"
+    },
+    {
+      "hash": "0xa6a8e0c4b0f18c239675eec76a3e5232f55af290f0a49ce0b65176d2bdb33b11",
+      "nonce": 3,
+      "kind": "fulfill",
+      "blockNumber": "56545125",
+      "gasUsed": "74365",
+      "effectiveGasPrice": "21000000000",
+      "executionFeeWei": "1561665000000000",
+      "l1FeeWei": "115"
+    },
+    {
+      "hash": "0x01c0b536d415cade1e60209d1f22eb84ba6345041aadf627b7e8bffb1a1f1076",
+      "nonce": 4,
+      "kind": "reward",
+      "blockNumber": "56545703",
+      "gasUsed": "86126",
+      "effectiveGasPrice": "21000000000",
+      "executionFeeWei": "1808646000000000",
+      "l1FeeWei": "156"
+    }
+  ],
+  "gasTotals": {
+    "gasUsed": "689034",
+    "executionFeeWei": "14469714000000000",
+    "l1FeeWei": "1076"
+  },
+  "completedAt": "2026-10-19T01:51:38.582Z",
+  "operationStates": [
+    {
+      "id": "operation-3bb57ef2-236a-4b99-a246-9b75444c8992",
+      "kind": "allocate",
+      "status": "FINALIZED",
+      "resource_id": "allocation-1a15f508-02ce-4293-8a3c-54aa6f5b85bc"
+    },
+    {
+      "id": "operation-6391dc8e-b81a-44d3-8d4a-82f285d7295e",
+      "kind": "reward",
+      "status": "FINALIZED",
+      "resource_id": "reward-1f2af806-2948-4ada-b0dd-a6923e083c00"
+    },
+    {
+      "id": "operation-b456fe10-9cde-4f85-baee-277e573e3a48",
+      "kind": "pay",
+      "status": "FINALIZED",
+      "resource_id": "payment-fbd71e86-8b59-49c4-9859-25ebe024b2cc"
+    },
+    {
+      "id": "operation-70241a33-d6b5-49c2-91ed-72a2d41b651e",
+      "kind": "claimDelivery",
+      "status": "FINALIZED",
+      "resource_id": "payment-fbd71e86-8b59-49c4-9859-25ebe024b2cc"
+    },
+    {
+      "id": "operation-ceac8e95-58ce-4413-9bab-ac1e9bd04942",
+      "kind": "fulfill",
+      "status": "FINALIZED",
+      "resource_id": "payment-fbd71e86-8b59-49c4-9859-25ebe024b2cc"
+    },
+    {
+      "id": "operation-481c4d7b-d153-4a07-8d9f-5ddba7c9bd15",
+      "kind": "reward",
+      "status": "FINALIZED",
+      "resource_id": "reward-1817a3a1-422d-4498-94db-cad933c2bdd3"
+    }
+  ],
+  "finalizedVerification": {
+    "checkedAt": "2026-10-19T01:52:55.876Z",
+    "blockNumber": "56545934",
+    "blockHash": "0x8f4036f6a142afae7cb4f82d6c07fd01f0d82ff7b207eaaf0f35ece7189a0ed2",
+    "reserve": "999900.000000",
+    "totalBudgets": "93.000000",
+    "totalEscrow": "0.000000",
+    "contractBalance": "999993.000000",
+    "player": "7.000000",
+    "gameA": "90.000000",
+    "gameB": "3.000000",
+    "totalSupply": "1000000.000000",
+    "solvent": true
+  },
+  "nativeFees": {
+    "executionRON": "0.014469714",
+    "l1RON": "0.000000000000001076",
+    "executionAndReportedL1RON": "0.014469714000001076"
+  }
+}

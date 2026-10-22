@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Metanomic 지갑 서명 확인</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar"><a class="brand" href="/">Metanomic</a></header>
+    <main>
+      <section class="panel">
+        <h1>지갑 서명 확인</h1>
+        <p class="muted">
+          로그인과 분리해 연결 승인과 메시지 서명만 확인합니다. 계정 검사·체인
+          전환·서버 로그인 요청·거래 제출은 하지 않습니다.
+        </p>
+        <div id="check-wallets" class="actions"></div>
+        <ol id="check-steps" aria-live="polite"></ol>
+        <p id="check-result" role="status">사용할 지갑을 선택하세요.</p>
+        <a href="/">로그인 화면으로 돌아가기</a>
+      </section>
+    </main>
+    <script type="module" src="/wallet-check.js"></script>
+  </body>
+</html>
