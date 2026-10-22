@@ -1,6 +1,7 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { formatEther, getAddress, keccak256, parseEther, toHex } from "viem";
 import { openTableRow, renderTable } from "./table.js";
+import { initAllocation, renderAllocation } from "./allocation.js";
 import {
   WalletDiscovery,
   assertWalletSession,
@@ -225,7 +226,6 @@ let me: any,
   localAccount: any,
   address: `0x${string}` | undefined,
   currentPayment: any,
-  allocation: any,
   issuance: any,
   latestOverview: any;
 let refreshBusy = false;
@@ -246,7 +246,6 @@ function resetSession() {
   address = undefined;
   localAccount = undefined;
   currentPayment = undefined;
-  allocation = undefined;
   walletProvider = undefined;
   walletChainId = undefined;
   stopWalletEvents?.();
@@ -1346,11 +1345,13 @@ function renderAdminGames(data: any) {
     empty: "등록된 게임이 없습니다.",
   });
 }
+const PAGE_SIZE = 10;
 function renderOperations(data: any) {
   const running = (o: any) => !["FINALIZED", "FAILED"].includes(o.status);
   renderTable<any>($("#operations"), {
     rows: data.operations,
     key: (o) => o.id,
+    pageSize: PAGE_SIZE,
     searchPlaceholder: "작업·게임·오류 검색",
     searchText: (o) =>
       `${o.kind} ${OPERATION_LABELS[o.kind] ?? ""} ${o.game_id ?? ""} ${o.error ?? ""} ${o.id}`,
@@ -1405,6 +1406,43 @@ function renderOperations(data: any) {
     empty: "지연된 결제가 없습니다.",
   });
 }
+const AUDIT_GROUPS: [string, string[]][] = [
+  ["로그인·계정", ["session.", "account.", "admin."]],
+  ["운영자 신청", ["operator.application."]],
+  ["게임", ["game."]],
+  ["예산·발행", ["allocation.", "issuance.", "budget."]],
+  ["API 키", ["credential."]],
+  ["가스·작업", ["relayer.", "operation."]],
+];
+const AUDIT_LABELS: Record<string, string> = {
+  "session.wallet-login": "지갑 로그인",
+  "account.wallet-linked": "수령 지갑 연결",
+  "admin.setup-wallet": "관리자 지갑 설정",
+  "operator.application.create": "운영자 신청",
+  "operator.application.approve": "운영자 승인",
+  "operator.application.reject": "운영자 반려",
+  "game.registration.submit": "게임 등록 신청",
+  "game.registration.approve": "게임 등록 승인",
+  "game.registration.reject": "게임 등록 반려",
+  "game.register": "게임 체인 기록",
+  "game.active": "게임 켜기·끄기",
+  "game.chain-state": "체인 중지·재개",
+  "game.delete": "게임 삭제",
+  "allocation.create": "예산 배분",
+  "allocation.schedule.create": "반복 배분 등록",
+  "allocation.schedule.update": "반복 배분 중지·재개",
+  "allocation.schedule.delete": "반복 배분 삭제",
+  "issuance.create": "CGC 발행",
+  "budget.reconciled": "예산 장부 보정",
+  "credential.issue": "API 키 발급",
+  "credential.revoke": "API 키 폐기",
+  "relayer.fund": "중계 지갑 충전",
+  "operation.replace": "수수료 대체",
+  "resolution.approve": "공동 승인 환불",
+  "deployment.activate": "배포 활성화",
+};
+const inAuditGroup = (action: string, prefixes: string[]) =>
+  prefixes.some((prefix) => action.startsWith(prefix));
 function renderAudit(data: any) {
   const pretty = (payload: string) => {
     try {
@@ -1413,41 +1451,48 @@ function renderAudit(data: any) {
       return payload;
     }
   };
+  const grouped = AUDIT_GROUPS.flatMap(([, prefixes]) => prefixes);
   renderTable<any>($("#audit"), {
     rows: data.audit,
     key: (a) => a.id,
+    pageSize: PAGE_SIZE,
     searchPlaceholder: "작업·실행자·내용 검색",
-    searchText: (a) => `${a.action} ${a.actor_id} ${a.payload}`,
+    searchText: (a) =>
+      `${a.action} ${AUDIT_LABELS[a.action] ?? ""} ${a.actor_id} ${a.payload}`,
+    filters: [
+      { label: "전체", match: () => true },
+      ...AUDIT_GROUPS.map(([label, prefixes]) => ({
+        label,
+        match: (a: any) => inAuditGroup(a.action, prefixes),
+      })),
+      { label: "기타", match: (a: any) => !inAuditGroup(a.action, grouped) },
+    ],
     columns: [
       { label: "시각", cell: (a) => when(a.created_at), className: "nowrap" },
-      { label: "작업", cell: (a) => `<strong>${esc(a.action)}</strong>` },
+      {
+        label: "작업",
+        cell: (a) =>
+          `<strong>${esc(AUDIT_LABELS[a.action] ?? a.action)}</strong>`,
+      },
       { label: "실행자", cell: (a) => esc(a.actor_id) },
     ],
-    detail: (a) => `<pre class="audit-payload">${esc(pretty(a.payload))}</pre>`,
+    detail: (a) =>
+      `<p class="muted"><code>${esc(a.action)}</code></p><pre class="audit-payload">${esc(pretty(a.payload))}</pre>`,
     empty: "관리 기록이 없습니다.",
   });
 }
 async function refreshAdmin() {
-  const [data, applications] = await Promise.all([
+  const [data, applications, schedules] = await Promise.all([
       api("/admin/overview"),
       api("/operator-applications"),
+      api("/allocation-schedules"),
     ]),
     a = data.accounting;
   const pendingApplications = renderOperatorApplications(
     applications.applications,
   );
   renderRegistrations(data.registrations);
-  const select = $("#allocation-game-select") as HTMLSelectElement;
-  const options = data.games
-    .filter((g: any) => g.active)
-    .map((g: any) => `<option value="${esc(g.id)}">${esc(g.name)}</option>`)
-    .join("");
-  if (select.innerHTML !== options) {
-    const value = select.value;
-    select.innerHTML = options;
-    if (Array.from(select.options).some((o) => o.value === value))
-      select.value = value;
-  }
+  renderAllocation(data, schedules.schedules);
   const reviewCount =
     pendingApplications +
     data.registrations.filter((r: any) =>
@@ -1781,33 +1826,11 @@ $("#workspace").addEventListener("click", (e) => {
 on("#refresh-player", "click", refreshPlayer);
 on("#refresh-admin", "click", refreshAdmin);
 on("#refresh-operator", "click", refreshOperator);
-on("#allocation-form", "submit", (e) => {
-  e.preventDefault();
-  allocation = {
-    ...Object.fromEntries(new FormData(e.currentTarget)),
-    assetId: asset.assetId,
-  };
-  const select = $<HTMLSelectElement>("#allocation-game-select");
-  const gameName = select.selectedOptions[0]?.textContent ?? allocation.gameId;
-  $("#allocation-details").innerHTML =
-    `<div class="activity-row"><span>게임</span><strong>${esc(gameName)}</strong></div><div class="activity-row"><span>배분 코인</span><strong>${esc(allocation.amount)} CGC</strong></div>`;
-  ($("#allocation-dialog") as HTMLDialogElement).showModal();
-});
-on("#cancel-allocation", "click", () =>
-  ($("#allocation-dialog") as HTMLDialogElement).close(),
-);
-on("#confirm-allocation", "click", async (e) => {
-  // Each allocation is new now, so a double click must not send two.
-  const button = e.currentTarget as HTMLButtonElement;
-  if (button.disabled) return;
-  button.disabled = true;
-  const r = await api("/allocations", allocation).finally(() => {
-    button.disabled = false;
-  });
-  ($("#allocation-dialog") as HTMLDialogElement).close();
-  toast("예산 배분을 접수했습니다.");
-  await waitOperation(r.operationId);
-  await refreshAdmin();
+initAllocation({
+  api,
+  toast,
+  refresh: () => refreshAdmin(),
+  assetId: () => asset.assetId,
 });
 // Mirrors the server's reserve rule for the preview; the server enforces it exactly.
 const TRANSFER_FEE_ESTIMATE_WEI = parseEther("0.001");

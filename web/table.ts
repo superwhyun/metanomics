@@ -21,10 +21,13 @@ export interface TableSpec<T> {
   actions?: (row: T) => string;
   empty: string;
   searchPlaceholder?: string;
+  // Rows per page; without it every matching row is shown.
+  pageSize?: number;
 }
 interface TableState {
   query: string;
   filter: number;
+  page: number;
   open: Set<string>;
   kept: Map<string, string>;
 }
@@ -43,7 +46,13 @@ const specs = new Map<string, TableSpec<any>>();
 function stateOf(id: string) {
   let state = states.get(id);
   if (!state) {
-    state = { query: "", filter: 0, open: new Set(), kept: new Map() };
+    state = {
+      query: "",
+      filter: 0,
+      page: 0,
+      open: new Set(),
+      kept: new Map(),
+    };
     states.set(id, state);
   }
   return state;
@@ -58,12 +67,13 @@ export function renderTable<T>(container: HTMLElement, spec: TableSpec<T>) {
   specs.set(container.id, spec);
   if (!container.dataset.table) {
     container.dataset.table = "1";
-    container.innerHTML = `<div class="table-toolbar"><input type="search" class="table-search" placeholder="${attr(spec.searchPlaceholder ?? "검색")}" aria-label="검색"><div class="table-filters"></div></div><div class="table-wrap"><table class="data-table"><thead></thead><tbody></tbody></table></div>`;
+    container.innerHTML = `<div class="table-toolbar"><input type="search" class="table-search" placeholder="${attr(spec.searchPlaceholder ?? "검색")}" aria-label="검색"><div class="table-filters"></div></div><div class="table-wrap"><table class="data-table"><thead></thead><tbody></tbody></table></div><nav class="table-pager" aria-label="페이지"></nav>`;
     const state = stateOf(container.id);
     container
       .querySelector<HTMLInputElement>(".table-search")!
       .addEventListener("input", (e) => {
         state.query = (e.target as HTMLInputElement).value;
+        state.page = 0;
         draw(container);
       });
     container.addEventListener("click", (e) => {
@@ -71,6 +81,13 @@ export function renderTable<T>(container: HTMLElement, spec: TableSpec<T>) {
       const filter = target.closest<HTMLElement>("[data-table-filter]");
       if (filter) {
         state.filter = Number(filter.dataset.tableFilter);
+        state.page = 0;
+        draw(container);
+        return;
+      }
+      const page = target.closest<HTMLButtonElement>("[data-table-page]");
+      if (page) {
+        state.page = Number(page.dataset.tablePage);
         draw(container);
         return;
       }
@@ -108,11 +125,23 @@ function draw(container: HTMLElement) {
       (!filters.length || filters[state.filter].match(row)) &&
       (!query || spec.searchText(row).toLowerCase().includes(query)),
   );
+  const size = spec.pageSize ?? rows.length;
+  const pages = Math.max(1, Math.ceil(rows.length / Math.max(size, 1)));
+  state.page = Math.min(state.page, pages - 1);
+  const visible = spec.pageSize
+    ? rows.slice(state.page * size, (state.page + 1) * size)
+    : rows;
+  const pager = container.querySelector<HTMLElement>(".table-pager")!;
+  pager.hidden = pages <= 1;
+  pager.innerHTML =
+    pages <= 1
+      ? ""
+      : `<button type="button" class="small" data-table-page="${state.page - 1}"${state.page === 0 ? " disabled" : ""}>‹ 이전</button><span>${state.page + 1} / ${pages} <small>· ${rows.length}건</small></span><button type="button" class="small" data-table-page="${state.page + 1}"${state.page === pages - 1 ? " disabled" : ""}>다음 ›</button>`;
   const span = spec.columns.length + (spec.actions ? 1 : 0);
   container.querySelector("thead")!.innerHTML =
     `<tr>${spec.columns.map((c) => `<th class="${c.className ?? ""}">${attr(c.label)}</th>`).join("")}${spec.actions ? "<th></th>" : ""}</tr>`;
-  container.querySelector("tbody")!.innerHTML = rows.length
-    ? rows
+  container.querySelector("tbody")!.innerHTML = visible.length
+    ? visible
         .map((row) => {
           const key = spec.key(row);
           const open = state.open.has(key);

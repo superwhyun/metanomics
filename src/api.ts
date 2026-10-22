@@ -33,6 +33,13 @@ import {
 } from "./wallet-auth.js";
 import { responseSchema } from "./schemas.js";
 import {
+  MONTHLY_LAST_DAY,
+  firstRun,
+  queueAllocation,
+  runDueSchedules,
+  type Cadence,
+} from "./schedules.js";
+import {
   ASSET,
   AppError,
   amount,
@@ -87,6 +94,8 @@ export async function createApi(
     staticFiles?: boolean;
     // Tests and local tooling sign in with passwords; operating servers use wallets only.
     passwordLogin?: boolean;
+    // How often recurring allocations are checked; 0 turns the timer off (tests).
+    scheduleIntervalMs?: number;
   } = {},
 ) {
   const app = Fastify({
@@ -380,6 +389,7 @@ export async function createApi(
         ([
           "/games",
           "/allocations",
+          "/allocation-schedules",
           "/issuances",
           "/relayer-fundings",
           "/game-registrations",
@@ -1235,6 +1245,7 @@ export async function createApi(
           "game_profiles",
           "game_registrations",
           "budget_snapshots",
+          "allocation_schedules",
         ])
           store.run(`DELETE FROM ${table} WHERE game_id=?`, g.id);
         store.run("DELETE FROM games WHERE id=?", g.id);
@@ -1626,35 +1637,170 @@ export async function createApi(
         "ALLOCATION_PERIOD_REQUIRED",
       );
       const response = idem(p, req, () => {
-        const allocationId = id("allocation");
         const ref = req.body.period
           ? `${req.body.period}:${type}:${type === "weekly" ? "base" : req.body.allocationRef}`
-          : `once:${allocationId}`;
+          : `once:${id("ref")}`;
         const old = prior("allocations", g.id, ref, req.body);
         if (old)
           return operationResult("allocate", old.id, { allocationId: old.id });
-        store.run(
-          "INSERT INTO allocations VALUES(?,?,?,?,?)",
-          allocationId,
-          g.id,
+        const queued = queueAllocation(store, worker, {
+          actorId: p.id,
+          gameId: g.id,
+          deploymentId: a.deployment.id,
+          value,
           ref,
-          sha(canonical(req.body)),
-          json(req.body),
-        );
-        const op = worker.queue(
-          "allocate",
-          allocationId,
-          g.id,
-          a.deployment.id,
-          "admin",
-          [chainIdOf(allocationId), chainIdOf(g.id), value.toString()],
-        );
-        store.audit(p.id, "allocation.create", { allocationId, ...req.body });
-        return result(allocationId, op, { allocationId });
+          body: req.body,
+        });
+        return result(queued.allocationId, queued.operationId, {
+          allocationId: queued.allocationId,
+        });
       });
       return reply.code(202).send(response);
     },
   );
+  const scheduleView = (s: any) => ({
+    scheduleId: s.id,
+    gameId: s.game_id,
+    gameName:
+      store.get("SELECT name FROM games WHERE id=?", s.game_id)?.name ?? null,
+    amount: display(s.amount),
+    cadence: s.cadence,
+    day: s.day,
+    active: !!s.active,
+    nextRunAt: s.next_run_at,
+    lastRunAt: s.last_run_at,
+    lastAllocationId: s.last_allocation_id,
+    lastError: s.last_error,
+    createdAt: s.created_at,
+  });
+  const scheduleOf = (scheduleId: string) => {
+    const s = store.get(
+      "SELECT * FROM allocation_schedules WHERE id=?",
+      scheduleId,
+    );
+    requireThat(s, 404, "SCHEDULE_NOT_FOUND");
+    return s;
+  };
+  route(
+    "GET",
+    "/allocation-schedules",
+    "반복 예산 배분 목록",
+    null,
+    (_req, _reply, p) => {
+      only(p, "admin");
+      return {
+        schedules: store
+          .all("SELECT * FROM allocation_schedules ORDER BY created_at DESC")
+          .map(scheduleView),
+      };
+    },
+  );
+  route(
+    "POST",
+    "/allocation-schedules",
+    "반복 예산 배분 등록 (매주 요일 또는 매월 날짜)",
+    object({
+      gameId: string,
+      assetId: string,
+      amount: amountSchema,
+      cadence: { type: "string", enum: ["weekly", "monthly"] },
+      // weekly: 0(일)~6(토), monthly: 1~28
+      day: { type: "integer", minimum: 0, maximum: MONTHLY_LAST_DAY },
+    }),
+    (req, _reply, p) => {
+      only(p, "admin");
+      ensureAsset(req.body.assetId);
+      const g = game(p, req.body.gameId);
+      requireThat(g.active, 409, "GAME_INACTIVE");
+      const value = amount(req.body.amount);
+      const cadence = req.body.cadence as Cadence;
+      const day = req.body.day;
+      requireThat(
+        cadence === "weekly" ? day <= 6 : day >= 1,
+        422,
+        "INVALID_SCHEDULE_DAY",
+      );
+      return idem(p, req, () => {
+        const scheduleId = id("schedule");
+        const now = Date.now();
+        store.run(
+          "INSERT INTO allocation_schedules(id,game_id,amount,cadence,day,active,next_run_at,created_by,created_at) VALUES(?,?,?,?,?,1,?,?,?)",
+          scheduleId,
+          g.id,
+          value.toString(),
+          cadence,
+          day,
+          firstRun(cadence, day, now),
+          p.id,
+          now,
+        );
+        store.audit(p.id, "allocation.schedule.create", {
+          scheduleId,
+          ...req.body,
+        });
+        return scheduleView(scheduleOf(scheduleId));
+      });
+    },
+  );
+  route(
+    "PATCH",
+    "/allocation-schedules/:scheduleId",
+    "반복 예산 배분 일시 중지·재개",
+    object({ active: { type: "boolean" } }),
+    (req, _reply, p) => {
+      only(p, "admin");
+      const s = scheduleOf(req.params.scheduleId);
+      store.transaction(() => {
+        // Resuming starts from the next matching day; missed periods are not paid.
+        store.run(
+          "UPDATE allocation_schedules SET active=?,next_run_at=?,last_error=NULL WHERE id=?",
+          req.body.active ? 1 : 0,
+          req.body.active
+            ? firstRun(s.cadence, s.day, Date.now())
+            : s.next_run_at,
+          s.id,
+        );
+        store.audit(p.id, "allocation.schedule.update", {
+          scheduleId: s.id,
+          active: req.body.active,
+        });
+      });
+      return scheduleView(scheduleOf(s.id));
+    },
+  );
+  route(
+    "DELETE",
+    "/allocation-schedules/:scheduleId",
+    "반복 예산 배분 삭제 (이미 보낸 배분은 그대로)",
+    null,
+    (req, _reply, p) => {
+      only(p, "admin");
+      const s = scheduleOf(req.params.scheduleId);
+      store.transaction(() => {
+        store.run("DELETE FROM allocation_schedules WHERE id=?", s.id);
+        store.audit(p.id, "allocation.schedule.delete", {
+          scheduleId: s.id,
+          gameId: s.game_id,
+        });
+      });
+      return { scheduleId: s.id, deleted: true };
+    },
+  );
+  const runSchedules = (now = Date.now()) => {
+    const asset = store.get("SELECT * FROM assets WHERE id=?", ASSET);
+    return runDueSchedules(store, worker, asset?.active_deployment, ASSET, now);
+  };
+  if (options.scheduleIntervalMs !== 0) {
+    const timer = setInterval(() => {
+      try {
+        runSchedules();
+      } catch (e: any) {
+        app.log.error({ err: e }, "allocation schedule run failed");
+      }
+    }, options.scheduleIntervalMs ?? 60_000);
+    app.addHook("onClose", async () => clearInterval(timer));
+  }
+  app.decorate("runSchedules", runSchedules);
   // Manual relayer top-up; the admin wallet always keeps its own gas reserve.
   const DEFAULT_ADMIN_MIN_WEI = parseEther("0.5");
   route(
@@ -2616,6 +2762,23 @@ export async function createApi(
         games: await Promise.all(
           store.all("SELECT * FROM games").map(async (g) => ({
             ...g,
+            budget: (() => {
+              const snapshot = store.get(
+                "SELECT amount,block_number FROM budget_snapshots WHERE deployment_id=? AND game_id=?",
+                a.deployment.id,
+                g.id,
+              );
+              return snapshot
+                ? display(
+                    BigInt(snapshot.amount) +
+                      worker.incoming(
+                        a.deployment.id,
+                        g.id,
+                        snapshot.block_number,
+                      ),
+                  )
+                : null;
+            })(),
             chainActive: (
               (await a.read("games", [chainIdOf(g.id)])) as [string, boolean]
             )[1],
@@ -2630,13 +2793,13 @@ export async function createApi(
           "SELECT id,username,role,wallet FROM accounts WHERE role='operator'",
         ),
         operations: store.all(
-          "SELECT id,kind,resource_id,game_id,status,error,created_at FROM operations ORDER BY rowid DESC LIMIT 100",
+          "SELECT id,kind,resource_id,game_id,status,error,created_at FROM operations ORDER BY rowid DESC LIMIT 300",
         ),
         payments: store.all(
           "SELECT id,game_id,status,claim_by,created_at FROM payments ORDER BY rowid DESC LIMIT 100",
         ),
         audit: store.all(
-          "SELECT * FROM audit_events ORDER BY rowid DESC LIMIT 50",
+          "SELECT * FROM audit_events ORDER BY rowid DESC LIMIT 300",
         ),
         workerError: worker.lastError,
       };

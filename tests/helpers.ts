@@ -49,7 +49,10 @@ export async function fixture(t: any) {
   });
   const adapter = new EvmAdapter(deployment, keys);
   let worker = new Worker(store, new Map([[deployment.id, adapter]]));
-  let app = await createApi(store, worker, { staticFiles: false });
+  let app = await createApi(store, worker, {
+    staticFiles: false,
+    scheduleIntervalMs: 0,
+  });
   const networkUrl = await app.listen({ port: 0, host: "127.0.0.1" });
   const call = async (
     token: string | null,
@@ -208,7 +211,10 @@ export async function fixture(t: any) {
     store.close();
     store = new Store(storePath);
     worker = new Worker(store, new Map([[deployment.id, adapter]]));
-    app = await createApi(store, worker, { staticFiles: false });
+    app = await createApi(store, worker, {
+      staticFiles: false,
+      scheduleIntervalMs: 0,
+    });
   }
   t.after(async () => {
     await app.close();
@@ -236,6 +242,9 @@ export async function fixture(t: any) {
     restart,
     get store() {
       return store;
+    },
+    runSchedules(now: number) {
+      return (app as any).runSchedules(now) as number;
     },
     get worker() {
       return worker;

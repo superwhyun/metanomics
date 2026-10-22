@@ -48,6 +48,8 @@ export class Store {
       CREATE INDEX IF NOT EXISTS game_events ON event_outbox(game_id,seq);
       CREATE INDEX IF NOT EXISTS payment_recovery ON payments(game_id,status,created_at);
       CREATE INDEX IF NOT EXISTS operator_registrations ON game_registrations(operator_id,status);
+      CREATE TABLE IF NOT EXISTS allocation_schedules(id TEXT PRIMARY KEY, game_id TEXT NOT NULL, amount TEXT NOT NULL, cadence TEXT NOT NULL, day INTEGER NOT NULL, active INTEGER NOT NULL, next_run_at INTEGER NOT NULL, last_run_at INTEGER, last_allocation_id TEXT, last_error TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS due_schedules ON allocation_schedules(active,next_run_at);
     `);
     this.addColumns("game_credentials", {
       label: "TEXT NOT NULL DEFAULT ''",

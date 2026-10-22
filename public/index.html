@@ -319,24 +319,90 @@
             </div>
             <div id="network-stats" class="stats-grid"></div>
           </section>
-          <section class="panel" data-tab="budget">
-            <h2>예산 배분</h2>
-            <p class="muted">미배분 보유분 → 게임 보상 예산</p>
-            <form id="allocation-form" class="form-grid">
-              <label
-                >게임<select
-                  name="gameId"
-                  id="allocation-game-select"
-                ></select></label
-              ><label
-                >배분 코인<input
-                  name="amount"
-                  inputmode="decimal"
-                  value="100.000000"
-                  required /></label
-              ><button type="submit" class="primary">미리보기와 배분</button>
+          <section class="panel alloc-panel" data-tab="budget">
+            <header class="alloc-head">
+              <div>
+                <h2>예산 배분</h2>
+                <p class="muted">미배분 보유분 → 게임 보상 예산</p>
+              </div>
+              <div class="alloc-reserve">
+                <span>배분 가능 보유분</span>
+                <strong><span id="alloc-reserve">—</span> CGC</strong>
+              </div>
+            </header>
+            <form id="allocation-form" class="alloc-grid">
+              <fieldset class="alloc-step alloc-games">
+                <legend>
+                  <span class="op-num">1</span>게임
+                  <small id="alloc-game-count" class="muted"></small>
+                </legend>
+                <input
+                  type="search"
+                  id="alloc-game-search"
+                  placeholder="게임 이름·ID 검색"
+                  aria-label="게임 검색"
+                />
+                <div
+                  id="alloc-game-list"
+                  class="game-picker"
+                  role="radiogroup"
+                  aria-label="배분할 게임"
+                ></div>
+              </fieldset>
+              <fieldset class="alloc-step">
+                <legend><span class="op-num">2</span>금액</legend>
+                <label class="amount-field"
+                  ><input
+                    id="alloc-amount"
+                    inputmode="decimal"
+                    autocomplete="off"
+                    value="100"
+                    aria-label="배분 금액"
+                  /><span>CGC</span></label
+                >
+                <div id="alloc-presets" class="preset-row"></div>
+                <input
+                  type="range"
+                  id="alloc-slider"
+                  class="amount-slider"
+                  min="0"
+                  aria-label="금액 슬라이더"
+                />
+                <p id="alloc-remaining" class="alloc-remaining"></p>
+              </fieldset>
+              <fieldset class="alloc-step">
+                <legend><span class="op-num">3</span>주기</legend>
+                <div
+                  id="alloc-mode"
+                  class="segmented"
+                  role="radiogroup"
+                  aria-label="배분 주기"
+                >
+                  <button type="button" role="radio" data-alloc-mode="once">
+                    한 번만</button
+                  ><button type="button" role="radio" data-alloc-mode="weekly">
+                    매주</button
+                  ><button type="button" role="radio" data-alloc-mode="monthly">
+                    매월
+                  </button>
+                </div>
+                <div id="alloc-weekday" class="week-row" hidden></div>
+                <div id="alloc-monthday" class="month-grid" hidden></div>
+                <p id="alloc-summary" class="alloc-summary"></p>
+                <button type="submit" id="alloc-submit" class="primary wide">
+                  지금 배분하기
+                </button>
+              </fieldset>
             </form>
-            <p id="allocation-preview" class="muted"></p>
+          </section>
+          <section class="panel" data-tab="budget">
+            <h2>반복 배분</h2>
+            <p class="muted">
+              정한 요일·날짜의 서버 시간 0시에 자동으로 배분합니다. 서버가 꺼져
+              있었거나 게임이 꺼진 회차는 건너뛰고, 밀린 회차를 몰아서 보내지
+              않습니다.
+            </p>
+            <div id="allocation-schedules"></div>
           </section>
           <section class="panel" data-tab="budget">
             <h2>CGC 추가 발행</h2>
