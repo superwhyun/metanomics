@@ -219,14 +219,22 @@ export function responseSchema(method: string, path: string): any {
       },
       ["challengeId", "message", "expiresAt", "address", "chainId"],
     );
+  if (path === "/account/login-wallets/alias")
+    return open({ address: text, alias: nullableText }, ["address", "alias"]);
   if (path === "/account/login-wallets")
     return method === "GET"
       ? open(
           {
             addresses: array(text),
+            wallets: array(
+              open({ address: text, alias: nullableText }, [
+                "address",
+                "alias",
+              ]),
+            ),
             signingWallet: { anyOf: [text, { type: "null" }] },
           },
-          ["addresses", "signingWallet"],
+          ["addresses", "wallets", "signingWallet"],
         )
       : open({ address: text, linked: { type: "boolean" } }, [
           "address",

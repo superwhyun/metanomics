@@ -96,6 +96,12 @@ METANOMIC_ASSET_ID=common-game-credit
 
 기존 계정에 새 로그인 지갑을 등록할 때는 기존 계정으로 로그인한 후 `POST /account/login-wallets/challenges`에 같은 주소·배포 형식을 보내고, 응답의 등록용 메시지에 서명해 `POST /account/login-wallets`로 제출한다. 로그인용과 등록용 challenge는 서로 교환할 수 없으며, 등록 challenge는 해당 계정의 세션에만 사용한다. `GET /account/login-wallets`로 등록 주소와 계약 승인 지갑을 확인한다. 이미 다른 계정인 지갑은 `WALLET_ALREADY_LINKED`로 거절하고 기록을 자동 병합하지 않는다. 로그인 지갑 등록은 기존 보상 수령 지갑과 계약 승인 주소를 변경하지 않는다.
 
+`GET /account/login-wallets`는 기존 `addresses: string[]`, `signingWallet`을 유지하고 `wallets: { address: string, alias: string | null }[]`를 추가합니다. 주소는 체크섬 형태이고 별명이 없으면 `null`입니다. 인증된 본인 목록에만 별명이 포함됩니다.
+
+`PUT /account/login-wallets/alias`에 `{"address":"0x등록주소","alias":"게임용 지갑"}`을 보내 별명을 저장·수정합니다. 응답은 `{ address, alias }`입니다. `alias: null` 또는 빈 문자열/공백만 보내면 별명만 삭제합니다. 앞뒤 공백 제거 및 연속 공백 축약 후 40 UTF-16 코드 단위 이내여야 하며 원문 입력은 256자 이내입니다. 인증된 일반 계정만 본인 등록 로그인·승인·수령 지갑을 변경할 수 있고 게임 자격증명·비인증 요청·다른 계정 또는 미등록 주소는 거절합니다. 별명에는 인증·서명 권한이 없습니다.
+
+포털은 로그인 후 받은 별명을 주소 소문자 키로 브라우저에 캐시해 로그아웃 뒤 다음 계정 선택에 사용합니다. 다른 브라우저에서 변경한 별명은 다음 인증 목록 조회로 갱신됩니다. 공개 별명 조회 API는 없으며 캐시는 표시용 힌트에 불과합니다. 별명 문자열은 HTML로 해석하지 않고 텍스트로 표시합니다.
+
 Challenge 접수 유효기간은 5분, 세션은 메시지 발급 후 최대 8시간이다. nonce의 검증 후 소비와 계정 생성·연결·세션 발급은 하나의 DB 거래로 보호한다. 만료·취소 시 새 challenge를 발급하고, `429 AUTH_RATE_LIMITED`에서는 잠시 기다린다. 일반 EVM 개인키 지갑만 지원하며 EIP-1271 계약 지갑은 아직 지원하지 않는다.
 
 ### 외부 게임의 화면 구성

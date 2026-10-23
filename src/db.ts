@@ -55,6 +55,7 @@ export class Store {
       label: "TEXT NOT NULL DEFAULT ''",
       created_at: "INTEGER NOT NULL DEFAULT 0",
     });
+    this.addColumns("login_wallets", { alias: "TEXT" });
     // Keys revoked before revocation meant deletion.
     this.run("DELETE FROM game_credentials WHERE revoked=1");
     this.seedDemoProfiles();

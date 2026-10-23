@@ -1,3 +1,8 @@
+import {
+  WalletAliasCache,
+  renderAccountChoices,
+  renderLoginWallets,
+} from "./wallet-aliases.js";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { formatEther, getAddress, keccak256, parseEther, toHex } from "viem";
 import { openTableRow, renderTable } from "./table.js";
@@ -232,6 +237,7 @@ let refreshBusy = false;
 let operatorRegistrations: any[] = [];
 let catalogGames: any[] = [];
 const walletDiscovery = new WalletDiscovery(window);
+const walletAliases = new WalletAliasCache();
 let walletProvider: WalletProvider | undefined;
 let walletChainId: number | undefined;
 let stopWalletEvents: (() => void) | undefined;
@@ -349,18 +355,11 @@ function chooseAccount(accounts: string[]): Promise<string> {
       reject(new Error("계정 선택을 취소했습니다."));
     };
     dialog.addEventListener("close", closed);
-    for (const account of accounts) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "account-choice";
-      button.textContent = account;
-      button.addEventListener("click", () => {
-        dialog.removeEventListener("close", closed);
-        dialog.close();
-        resolve(account);
-      });
-      choices.append(button);
-    }
+    renderAccountChoices(choices, accounts, walletAliases, (account) => {
+      dialog.removeEventListener("close", closed);
+      dialog.close();
+      resolve(account);
+    });
     dialog.showModal();
   });
 }
@@ -484,13 +483,26 @@ async function linkWallet() {
   toast("지갑이 연결됐습니다.");
 }
 async function refreshLoginWallets() {
+  const epoch = sessionEpoch;
   const result = await api("/account/login-wallets");
+  if (epoch !== sessionEpoch || !token) return;
+  walletAliases.remember(result.wallets);
   $("#approval-wallet").textContent = result.signingWallet
     ? `등록된 승인 지갑: ${result.signingWallet} · 계약 서명은 이 지갑으로 합니다.`
     : "등록된 승인 지갑이 없습니다.";
-  $("#login-wallets").textContent = result.addresses.length
-    ? result.addresses.join(" · ")
-    : "아직 등록된 로그인 지갑이 없습니다. 기존 계정에 사용할 지갑을 등록하세요.";
+  renderLoginWallets(
+    $("#login-wallets"),
+    result.wallets,
+    async (wallet) => {
+      if (epoch !== sessionEpoch || !token)
+        throw new Error("다시 로그인하세요.");
+      const saved = await api("/account/login-wallets/alias", wallet, "PUT");
+      if (epoch !== sessionEpoch || !token) return;
+      walletAliases.remember([saved]);
+      await refreshLoginWallets();
+    },
+    toast,
+  );
 }
 async function signWalletChallenge(path: string) {
   const challenge = await api(path, {

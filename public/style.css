@@ -1844,3 +1844,30 @@ button.small {
     transform: none;
   }
 }
+
+.login-wallet-alias {
+  display: grid;
+  gap: 10px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.login-wallet-alias code,
+.account-choice-row code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.login-wallet-alias strong {
+  overflow-wrap: anywhere;
+}
+.account-choice-row button {
+  width: 100%;
+  font-family: inherit;
+}
+.account-choice-row details {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.account-choice-row summary {
+  cursor: pointer;
+}

@@ -1,5 +1,9 @@
 import { getAddress, verifyMessage, type Address, type Hex } from "viem";
 import { createSiweMessage } from "viem/siwe";
+import {
+  normalizeWalletAlias,
+  WALLET_ALIAS_MAX_LENGTH,
+} from "./wallet-alias.js";
 import { Store } from "./db.js";
 import { createSession } from "./auth.js";
 import { id, json, opaque, requireThat } from "./shared.js";
@@ -42,7 +46,7 @@ export function bindLoginWallet(
     "다른 계정에 연결된 지갑입니다. 계정은 자동으로 합치지 않습니다.",
   );
   store.run(
-    "INSERT OR IGNORE INTO login_wallets VALUES(?,?,?)",
+    "INSERT OR IGNORE INTO login_wallets(address,account_id,created_at) VALUES(?,?,?)",
     getAddress(address),
     accountId,
     Date.now(),
@@ -59,6 +63,57 @@ export function loginWallets(store: Store, accountId: string): Address[] {
     accountId,
   );
   return [...new Set(addresses.map((row) => getAddress(row.address)))];
+}
+
+export function loginWalletDetails(store: Store, accountId: string) {
+  const aliases = new Map<string, string | null>(
+    store
+      .all(
+        "SELECT address,alias FROM login_wallets WHERE account_id=?",
+        accountId,
+      )
+      .map((row) => [row.address.toLowerCase(), row.alias]),
+  );
+  return loginWallets(store, accountId).map((address) => ({
+    address,
+    alias: aliases.get(address.toLowerCase()) ?? null,
+  }));
+}
+
+export function setLoginWalletAlias(
+  store: Store,
+  accountId: string,
+  address: string,
+  value: string | null,
+) {
+  const normalized = value === null ? "" : normalizeWalletAlias(value);
+  requireThat(
+    normalized.length <= WALLET_ALIAS_MAX_LENGTH,
+    422,
+    "INVALID_WALLET_ALIAS",
+    "별명은 공백 정리 후 40자 이내로 입력하세요.",
+  );
+  const canonical = getAddress(address.toLowerCase());
+  return store.transaction(() => {
+    requireThat(
+      loginWallets(store, accountId).some(
+        (a) => a.toLowerCase() === canonical.toLowerCase(),
+      ) && walletOwner(store, canonical) === accountId,
+      403,
+      "WALLET_NOT_OWNED",
+      "본인 계정에 등록된 지갑의 별명만 변경할 수 있습니다.",
+    );
+    // Legacy signing/receiving wallets can predate the login_wallets table.
+    bindLoginWallet(store, accountId, canonical);
+    const alias = normalized || null;
+    store.run(
+      "UPDATE login_wallets SET alias=? WHERE address=? COLLATE NOCASE AND account_id=?",
+      alias,
+      canonical,
+      accountId,
+    );
+    return { address: canonical, alias };
+  });
 }
 
 type WalletPurpose = "login" | "link" | "operator" | "admin-setup";

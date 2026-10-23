@@ -28,7 +28,8 @@ import {
 import {
   WalletAuth,
   bindLoginWallet,
-  loginWallets,
+  loginWalletDetails,
+  setLoginWalletAlias,
   walletOwner,
 } from "./wallet-auth.js";
 import { responseSchema } from "./schemas.js";
@@ -366,7 +367,7 @@ export async function createApi(
   };
   type Handler = (req: any, reply: any, principal: Principal) => any;
   const route = (
-    method: "GET" | "POST" | "DELETE" | "PATCH",
+    method: "GET" | "POST" | "DELETE" | "PATCH" | "PUT",
     path: string,
     description: string,
     body: any,
@@ -508,10 +509,29 @@ export async function createApi(
     null,
     (_req, _reply, p) => {
       requireThat(p.role !== "game", 403, "ROLE_DENIED");
+      const wallets = loginWalletDetails(store, p.id);
       return {
-        addresses: loginWallets(store, p.id),
+        addresses: wallets.map((wallet) => wallet.address),
+        wallets,
         signingWallet: p.wallet ?? null,
       };
+    },
+  );
+  route(
+    "PUT",
+    "/account/login-wallets/alias",
+    "본인 등록 지갑의 사이트 별명 저장·수정·삭제 (null 또는 빈 문자열로 삭제)",
+    object({
+      address,
+      alias: {
+        description:
+          "Metanomic display name only. Trim and collapse whitespace; at most 40 UTF-16 code units after normalization. null or blank deletes the alias.",
+        anyOf: [{ type: "string", maxLength: 256 }, { type: "null" }],
+      },
+    }),
+    (req, _reply, p) => {
+      requireThat(p.role !== "game", 403, "ROLE_DENIED");
+      return setLoginWalletAlias(store, p.id, req.body.address, req.body.alias);
     },
   );
   route(

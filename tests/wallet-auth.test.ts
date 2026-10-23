@@ -446,3 +446,159 @@ test("public challenges reject unknown networks and throttle repeated login requ
   );
   assert.equal(failure.error.code, "AUTH_RATE_LIMITED");
 });
+
+test("site aliases preserve addresses compatibility, normalize case/whitespace and survive relogin, editing and deletion", async (t) => {
+  const f = await fixture(t);
+  const first = await f.login();
+  const update = (
+    alias: string | null,
+    address = wallets.new.address.toLowerCase(),
+  ) =>
+    f.call(
+      "/account/login-wallets/alias",
+      { address, alias },
+      first.token,
+      200,
+      "PUT",
+    );
+  assert.equal(
+    (await update(" \t 게임용\n  지갑 \u00a0")).alias,
+    "게임용 지갑",
+  );
+  const list = await f.call("/account/login-wallets", undefined, first.token);
+  assert.deepEqual(list.addresses, [wallets.new.address]);
+  assert.deepEqual(list.wallets, [
+    { address: wallets.new.address, alias: "게임용 지갑" },
+  ]);
+  await f.call("/sessions/me", undefined, first.token, 200, "DELETE");
+  const next = await f.login();
+  assert.equal(next.account.id, first.account.id);
+  assert.equal(
+    (await f.call("/account/login-wallets", undefined, next.token)).wallets[0]
+      .alias,
+    "게임용 지갑",
+  );
+  const edited = await f.call(
+    "/account/login-wallets/alias",
+    { address: wallets.new.address, alias: "수정한 별명" },
+    next.token,
+    200,
+    "PUT",
+  );
+  assert.equal(edited.alias, "수정한 별명");
+  for (const alias of [null, "", " \t\n "]) {
+    await f.call(
+      "/account/login-wallets/alias",
+      { address: wallets.new.address, alias },
+      next.token,
+      200,
+      "PUT",
+    );
+    assert.equal(
+      (await f.call("/account/login-wallets", undefined, next.token)).wallets[0]
+        .alias,
+      null,
+    );
+  }
+  assert.equal((await f.login()).account.id, first.account.id);
+  assert.equal(f.store.get("SELECT COUNT(*) AS n FROM operations").n, 0);
+});
+
+test("alias writes reject unauthenticated users, game credentials, foreign/unregistered wallets and cross-origin requests", async (t) => {
+  const f = await fixture(t);
+  const user = await f.login();
+  const admin = await f.password("admin");
+  const payload = { address: wallets.new.address, alias: "비공개 별명" };
+  await f.call("/account/login-wallets/alias", payload, user.token, 200, "PUT");
+  await f.call("/account/login-wallets", undefined, undefined, 401);
+  await f.call("/account/login-wallets/alias", payload, undefined, 401, "PUT");
+  await f.call(
+    "/account/login-wallets/alias",
+    payload,
+    "test-game-key",
+    403,
+    "PUT",
+  );
+  await f.call(
+    "/account/login-wallets/alias",
+    payload,
+    admin.token,
+    403,
+    "PUT",
+  );
+  await f.call(
+    "/account/login-wallets/alias",
+    { ...payload, address: wallets.other.address },
+    user.token,
+    403,
+    "PUT",
+  );
+  const otherList = await f.call(
+    "/account/login-wallets",
+    undefined,
+    admin.token,
+  );
+  assert.ok(!JSON.stringify(otherList).includes("비공개 별명"));
+  const denied = await f.app.inject({
+    method: "PUT",
+    url: "/v1/account/login-wallets/alias",
+    payload,
+    headers: {
+      authorization: `Bearer ${user.token}`,
+      origin: "https://evil.example",
+    },
+  });
+  assert.equal(denied.statusCode, 403);
+  const publicLookup = await f.app.inject({
+    method: "GET",
+    url: `/v1/account/login-wallets/alias?address=${wallets.new.address}`,
+  });
+  assert.equal(publicLookup.statusCode, 404);
+  assert.equal(
+    (await f.call("/account/login-wallets", undefined, user.token)).wallets[0]
+      .alias,
+    payload.alias,
+  );
+});
+
+test("aliases validate normalized length and input types, allow duplicate labels and preserve literal markup", async (t) => {
+  const f = await fixture(t);
+  const session = await f.password("admin");
+  const proof = await f.proof(await f.challenge(wallets.new, session.token));
+  await f.call("/account/login-wallets", proof, session.token);
+  const update = (address: string, alias: unknown, expected = 200) =>
+    f.call(
+      "/account/login-wallets/alias",
+      { address, alias },
+      session.token,
+      expected,
+      "PUT",
+    );
+  const markup = '<img src=x onerror="alert(1)">';
+  for (const address of [wallets.new.address, wallets.admin.address])
+    await update(address.toLowerCase(), markup);
+  let list = await f.call("/account/login-wallets", undefined, session.token);
+  assert.equal(list.wallets.length, 2);
+  assert.ok(list.wallets.every((w: any) => w.alias === markup));
+  assert.equal(list.signingWallet, wallets.admin.address);
+  await update(wallets.new.address, "가".repeat(40));
+  await update(wallets.new.address, "가".repeat(41), 422);
+  await update(wallets.new.address, "x".repeat(257), 422);
+  for (const alias of [12, {}, [], true])
+    await update(wallets.new.address, alias, 422);
+  await update("bad-address", "bad", 422);
+  list = await f.call("/account/login-wallets", undefined, session.token);
+  assert.equal(
+    list.wallets.find((w: any) => w.address === wallets.new.address).alias,
+    "가".repeat(40),
+  );
+  // Rebinding a known address must not overwrite its label.
+  const rebound = await f.proof(await f.challenge(wallets.new, session.token));
+  await f.call("/account/login-wallets", rebound, session.token);
+  assert.equal(
+    (
+      await f.call("/account/login-wallets", undefined, session.token)
+    ).wallets.find((w: any) => w.address === wallets.new.address).alias,
+    "가".repeat(40),
+  );
+});

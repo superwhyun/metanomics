@@ -514,14 +514,20 @@
           <div class="section-heading">
             <div>
               <h2>로그인 지갑</h2>
-              <p id="login-wallets" class="muted" aria-live="polite">
-                등록된 지갑을 확인하고 있습니다.
-              </p>
             </div>
             <button id="link-login-wallet" type="button">
               로그인 지갑 등록
             </button>
           </div>
+          <div id="login-wallets" aria-live="polite">
+            등록된 지갑을 확인하고 있습니다.
+          </div>
+          <p class="muted">
+            별명은 Metanomic에서 저장하는 표시 정보이며 지갑 앱의 계정 이름과는
+            별개입니다. 별명 변경·삭제는 지갑 소유권이나 로그인 권한에 영향을
+            주지 않습니다. 이 브라우저에는 다음 로그인 선택을 위해 별명이
+            남습니다. 공용 브라우저에서는 주의하세요.
+          </p>
           <p class="muted">
             이 계정의 기록과 권한으로 다시 로그인할 지갑을 등록합니다. 보상 수령
             지갑과 결제·인출 승인은 각 화면에서 별도로 관리합니다.
@@ -591,7 +597,9 @@
       <h2 id="account-dialog-title">사용할 계정을 선택하세요</h2>
       <p class="muted">
         지갑이 이 사이트에 연결한 계정이 여러 개입니다. 처음 쓰는 계정이면 새
-        이용자로 가입됩니다.
+        이용자로 가입됩니다. 별명은 이 브라우저가 로그인 후 기억한 Metanomic
+        사이트 별명이며, 지갑 앱의 이름과는 별개입니다. 별명이 같아도 주소를
+        확인하세요.
       </p>
       <div id="account-choices" class="wallet-choices"></div>
     </dialog>
