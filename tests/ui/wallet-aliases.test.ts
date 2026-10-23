@@ -126,6 +126,43 @@ async function fixture(
   return { page, store, openChoices, finishLogin, form, save };
 }
 
+test("player catalog launches games directly and never asks for a game link code or reward-wallet enrollment", async (t) => {
+  const f = await fixture(t);
+  f.store.run(
+    "INSERT INTO games VALUES('wallet-game','Wallet Game','owner',?,1)",
+    wallets[0].address,
+  );
+  f.store.run(
+    "INSERT INTO game_profiles VALUES('wallet-game','Play with your wallet','Arcade','https://game.example/play')",
+  );
+  const linkRequests: string[] = [];
+  f.page.on("request", (request) => {
+    if (/\/player-links|\/wallet-links/.test(request.url()))
+      linkRequests.push(request.url());
+  });
+  await f.openChoices();
+  await f.finishLogin();
+  await f.page.locator('[data-nav="play"]').click();
+  await expect(f.page.locator(".catalog-launch")).toHaveAttribute(
+    "href",
+    "https://game.example/play",
+  );
+  await expect(f.page.locator("[data-link-code]")).toHaveCount(0);
+  await expect(f.page.locator("#connect-wallet")).toHaveCount(0);
+  await expect(f.page.locator("#player-steps")).toContainText(
+    "게임에서 지갑으로 로그인",
+  );
+  await expect(f.page.locator("#player-steps")).not.toContainText(
+    "게임 계정 연결",
+  );
+  assert.deepEqual(linkRequests, []);
+  mkdirSync("artifacts", { recursive: true });
+  await f.page.screenshot({
+    path: "artifacts/wallet-game-catalog.png",
+    fullPage: true,
+  });
+});
+
 test(
   "real UI + isolated API + mock signer preserve aliases through logout, duplicate labels, edits and deletion",
   { timeout: 60_000 },

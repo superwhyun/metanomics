@@ -1,5 +1,6 @@
 import { loadRuntime } from "./runtime.js";
 import { DemoGame, NetworkClient } from "./game.js";
+import { ASSET } from "./shared.js";
 const gameId = process.env.GAME_ID as "game-a" | "game-b";
 if (!["game-a", "game-b"].includes(gameId))
   throw new Error("GAME_ID must be game-a or game-b");
@@ -13,7 +14,18 @@ const game = new DemoGame(
   ),
   process.env.GAME_PLAYER_PASSWORD ?? "pilot-dev",
 );
-const app = await game.app();
+const asset = (await game.network.call("/assets")).assets.find(
+  (a: any) => a.assetId === ASSET,
+);
+const deployment = asset?.deployments.find(
+  (d: any) => d.id === asset.activeDeploymentId,
+);
+if (!deployment) throw new Error("게임 로그인에 사용할 배포 설정이 없습니다.");
+const app = await game.app({
+  origin:
+    process.env.GAME_ORIGIN ?? `http://127.0.0.1:${process.env.GAME_PORT}`,
+  chainId: deployment.chainId,
+});
 const timer = setInterval(() => void game.tick(), 1000);
 await app.listen({ port: Number(process.env.GAME_PORT), host: "127.0.0.1" });
 async function close() {

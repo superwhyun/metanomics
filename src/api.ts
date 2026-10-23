@@ -29,6 +29,7 @@ import {
   WalletAuth,
   bindLoginWallet,
   loginWalletDetails,
+  loginWallets,
   setLoginWalletAlias,
   walletOwner,
 } from "./wallet-auth.js";
@@ -76,6 +77,29 @@ const object = (
   properties: Record<string, any>,
   required = Object.keys(properties),
 ) => ({ type: "object", additionalProperties: false, properties, required });
+const walletRequest = (
+  field: "recipient" | "payer",
+  properties: Record<string, any>,
+  required: string[],
+) => ({
+  ...object(
+    {
+      ...properties,
+      [field]: {
+        ...address,
+        description: "Wallet address verified by the game's own login session.",
+      },
+      playerId: {
+        ...string,
+        deprecated: true,
+        description:
+          "Legacy account-link integration only; omit when using a wallet address.",
+      },
+    },
+    required,
+  ),
+  oneOf: [{ required: [field] }, { required: ["playerId"] }],
+});
 const authorizationSchema = object(
   {
     signature,
@@ -262,10 +286,23 @@ export async function createApi(
         ...(operatorId ? [operatorId] : []),
       )
       .map(registrationView);
+  const ownsAddress = (p: Principal, value: unknown) =>
+    typeof value === "string" &&
+    loginWallets(store, p.id).some(
+      (wallet) => wallet.toLowerCase() === value.toLowerCase(),
+    );
+  const ownsPayment = (p: Principal, pay: any) =>
+    pay &&
+    (pay.player_id === p.id || ownsAddress(p, JSON.parse(pay.payload).payer));
+  const ownsReward = (p: Principal, reward: any) => {
+    if (!reward) return false;
+    const data = JSON.parse(reward.payload);
+    return data.playerId === p.id || ownsAddress(p, data.recipient);
+  };
   const paymentAccess = (p: Principal, paymentId: string) => {
     const pay = store.get("SELECT * FROM payments WHERE id=?", paymentId);
     requireThat(pay, 404, "PAYMENT_NOT_FOUND");
-    if (!(p.role === "player" && p.id === pay.player_id))
+    if (!(p.role === "player" && ownsPayment(p, pay)))
       game(p, pay.game_id, "payments");
     return pay;
   };
@@ -332,6 +369,33 @@ export async function createApi(
       403,
       "PLAYER_NOT_LINKED",
     );
+  // New integrations use the wallet verified by the game login. Legacy playerId
+  // requests remain supported, with their original account-link checks.
+  const gameWallet = (
+    body: any,
+    field: "recipient" | "payer",
+    gameId: string,
+    chainId: number,
+  ) => {
+    requireThat(
+      Boolean(body[field]) !== Boolean(body.playerId),
+      422,
+      "WALLET_TARGET_REQUIRED",
+      `지갑 ${field} 주소를 지정하세요. playerId와 함께 지정할 수 없습니다.`,
+    );
+    if (body.playerId) {
+      linked(gameId, body.playerId);
+      return walletFor(body.playerId, chainId);
+    }
+    const wallet = getAddress(body[field].toLowerCase());
+    requireThat(
+      wallet !== "0x0000000000000000000000000000000000000000",
+      422,
+      "INVALID_WALLET",
+    );
+    body[field] = wallet;
+    return wallet;
+  };
   const budgetView = async (deployment: string, gameId: string) => {
     const snapshot = await worker.refreshBudget(deployment, gameId);
     const reserved = worker.reserved(deployment, gameId);
@@ -1578,6 +1642,9 @@ export async function createApi(
     null,
     (_req, _reply, p) => {
       only(p, "player");
+      const wallets = json(
+        loginWallets(store, p.id).map((wallet) => wallet.toLowerCase()),
+      );
       return {
         links: store.all(
           "SELECT game_id AS gameId FROM player_links WHERE player_id=? ORDER BY game_id",
@@ -1585,14 +1652,16 @@ export async function createApi(
         ),
         payments: store
           .all(
-            "SELECT id,game_id,status,payload FROM payments WHERE player_id=? ORDER BY created_at DESC LIMIT 100",
+            "SELECT id,game_id,status,payload FROM payments WHERE player_id=? OR lower(json_extract(payload,'$.payer')) IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC LIMIT 100",
             p.id,
+            wallets,
           )
           .map((row) => ({ ...row, payload: JSON.parse(row.payload) })),
         rewards: store
           .all(
-            "SELECT * FROM rewards WHERE json_extract(payload,'$.playerId')=? ORDER BY rowid DESC LIMIT 100",
+            "SELECT * FROM rewards WHERE json_extract(payload,'$.playerId')=? OR lower(json_extract(payload,'$.recipient')) IN (SELECT value FROM json_each(?)) ORDER BY rowid DESC LIMIT 100",
             p.id,
+            wallets,
           )
           .map((r) => ({
             rewardId: r.id,
@@ -1984,24 +2053,28 @@ export async function createApi(
     "POST",
     "/games/:gameId/rewards",
     "게임 서버 보상 지급 요청",
-    object(
+    walletRequest(
+      "recipient",
       {
-        playerId: string,
         assetId: string,
         amount: amountSchema,
         rewardRef: string,
         metadata: { type: "object", additionalProperties: true },
       },
-      ["playerId", "assetId", "amount", "rewardRef"],
+      ["assetId", "amount", "rewardRef"],
     ),
     async (req, reply, p) => {
       const g = game(p, req.params.gameId, "rewards", true);
       requireThat(g.active, 409, "GAME_INACTIVE");
-      linked(g.id, req.body.playerId);
       ensureAsset(req.body.assetId);
       const a = active();
       const value = amount(req.body.amount);
-      const recipient = walletFor(req.body.playerId, a.deployment.chainId);
+      const recipient = gameWallet(
+        req.body,
+        "recipient",
+        g.id,
+        a.deployment.chainId,
+      );
       await budgetView(a.deployment.id, g.id);
       const response = idem(p, req, () => {
         const old = prior("rewards", g.id, req.body.rewardRef, req.body);
@@ -2069,25 +2142,27 @@ export async function createApi(
     "POST",
     "/games/:gameId/payments",
     "게임 서버의 가격 확정 주문 생성",
-    object({
-      playerId: string,
-      orderId: string,
-      assetId: string,
-      amount: amountSchema,
-      item: object({
-        sku: string,
-        name: string,
-        quantity: { type: "integer", minimum: 1, maximum: 10000 },
-      }),
-    }),
+    walletRequest(
+      "payer",
+      {
+        orderId: string,
+        assetId: string,
+        amount: amountSchema,
+        item: object({
+          sku: string,
+          name: string,
+          quantity: { type: "integer", minimum: 1, maximum: 10000 },
+        }),
+      },
+      ["orderId", "assetId", "amount", "item"],
+    ),
     async (req, _reply, p) => {
       const g = game(p, req.params.gameId, "payments", true);
       requireThat(g.active, 409, "GAME_INACTIVE");
-      linked(g.id, req.body.playerId);
       ensureAsset(req.body.assetId);
       const a = active();
       const value = amount(req.body.amount);
-      const payer = walletFor(req.body.playerId, a.deployment.chainId);
+      const payer = gameWallet(req.body, "payer", g.id, a.deployment.chainId);
       await a.finalBlock();
       const chainTime = await a.chainTime();
       return idem(p, req, () => {
@@ -2112,7 +2187,7 @@ export async function createApi(
           g.id,
           req.body.orderId,
           sha(canonical(req.body)),
-          req.body.playerId,
+          req.body.playerId ?? `wallet:${payer.toLowerCase()}`,
           a.deployment.id,
           "CREATED",
           json({ ...req.body, payer, authorization }),
@@ -2145,7 +2220,7 @@ export async function createApi(
     async (req, _reply, p) => {
       const pay = paymentAccess(p, req.params.paymentId);
       const view = paymentView(pay);
-      if (p.role === "player" && pay.status === "CREATED")
+      if (pay.status === "CREATED")
         view.permit = await worker
           .adapter(pay.deployment_id)
           .preparePermit(view.payer, amount(view.amount), pay.expires_at);
@@ -2163,7 +2238,17 @@ export async function createApi(
       const cursor = Number(req.query.cursor) || 0;
       const statuses = req.query.status
         ? String(req.query.status).split(",")
-        : ["CREATED", "PROCESSING", "PAID", "DELIVERY_CLAIMED"];
+        : req.query.orderId
+          ? [
+              "CREATED",
+              "PROCESSING",
+              "PAID",
+              "DELIVERY_CLAIMED",
+              "COMPLETED",
+              "REFUNDED",
+              "EXPIRED",
+            ]
+          : ["CREATED", "PROCESSING", "PAID", "DELIVERY_CLAIMED"];
       requireThat(
         statuses.every((s) =>
           [
@@ -2180,9 +2265,10 @@ export async function createApi(
         "INVALID_STATUS",
       );
       const rows = store.all(
-        `SELECT rowid AS cursor,* FROM payments WHERE game_id=? AND rowid>? AND status IN (${statuses.map(() => "?").join(",")}) ORDER BY rowid LIMIT ?`,
+        `SELECT rowid AS cursor,* FROM payments WHERE game_id=? AND rowid>? ${req.query.orderId ? "AND business_ref=?" : ""} AND status IN (${statuses.map(() => "?").join(",")}) ORDER BY rowid LIMIT ?`,
         req.params.gameId,
         cursor,
+        ...(req.query.orderId ? [String(req.query.orderId)] : []),
         ...statuses,
         limit,
       );
@@ -2198,9 +2284,12 @@ export async function createApi(
     "이용자 결제 서명 제출",
     authorizationSchema,
     async (req, reply, p) => {
-      only(p, "player");
       const pay = paymentAccess(p, req.params.paymentId);
-      requireThat(pay.player_id === p.id, 403, "NOT_PAYER");
+      if (p.role === "game") game(p, pay.game_id, "payments", true);
+      else {
+        only(p, "player");
+        requireThat(ownsPayment(p, pay), 403, "NOT_PAYER");
+      }
       // The portal switch replaces the contract flag, so a game switched off
       // accepts no new payment authorization. Resubmitting an accepted one is fine.
       if (
@@ -2623,16 +2712,15 @@ export async function createApi(
       requireThat(op, 404, "OPERATION_NOT_FOUND");
       if (p.role === "player") {
         const pay = store.get(
-          "SELECT * FROM payments WHERE id=? AND player_id=?",
+          "SELECT * FROM payments WHERE id=?",
           op.resource_id,
-          p.id,
         );
         const reward = store.get(
           "SELECT * FROM rewards WHERE id=?",
           op.resource_id,
         );
         requireThat(
-          pay || (reward && JSON.parse(reward.payload).playerId === p.id),
+          ownsPayment(p, pay) || ownsReward(p, reward),
           403,
           "OPERATION_ACCESS_DENIED",
         );

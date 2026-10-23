@@ -17391,11 +17391,6 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "playerId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 200
-                  },
                   "assetId": {
                     "type": "string",
                     "minLength": 1,
@@ -17414,13 +17409,36 @@
                   "metadata": {
                     "type": "object",
                     "additionalProperties": true
+                  },
+                  "recipient": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{40}$",
+                    "description": "Wallet address verified by the game's own login session."
+                  },
+                  "playerId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "deprecated": true,
+                    "description": "Legacy account-link integration only; omit when using a wallet address."
                   }
                 },
                 "required": [
-                  "playerId",
                   "assetId",
                   "amount",
                   "rewardRef"
+                ],
+                "oneOf": [
+                  {
+                    "required": [
+                      "recipient"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "playerId"
+                    ]
+                  }
                 ]
               }
             }
@@ -18249,11 +18267,6 @@
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "playerId": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 200
-                  },
                   "orderId": {
                     "type": "string",
                     "minLength": 1,
@@ -18294,14 +18307,37 @@
                       "name",
                       "quantity"
                     ]
+                  },
+                  "payer": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-fA-F]{40}$",
+                    "description": "Wallet address verified by the game's own login session."
+                  },
+                  "playerId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "deprecated": true,
+                    "description": "Legacy account-link integration only; omit when using a wallet address."
                   }
                 },
                 "required": [
-                  "playerId",
                   "orderId",
                   "assetId",
                   "amount",
                   "item"
+                ],
+                "oneOf": [
+                  {
+                    "required": [
+                      "payer"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "playerId"
+                    ]
+                  }
                 ]
               }
             }
@@ -18511,7 +18547,6 @@
                   "required": [
                     "paymentId",
                     "gameId",
-                    "playerId",
                     "orderId",
                     "assetId",
                     "deploymentId",
@@ -18701,7 +18736,6 @@
                   "required": [
                     "paymentId",
                     "gameId",
-                    "playerId",
                     "orderId",
                     "assetId",
                     "deploymentId",
@@ -19194,7 +19228,6 @@
                         "required": [
                           "paymentId",
                           "gameId",
-                          "playerId",
                           "orderId",
                           "assetId",
                           "deploymentId",
@@ -19400,7 +19433,6 @@
                         "required": [
                           "paymentId",
                           "gameId",
-                          "playerId",
                           "orderId",
                           "assetId",
                           "deploymentId",
@@ -19899,7 +19931,6 @@
                   "required": [
                     "paymentId",
                     "gameId",
-                    "playerId",
                     "orderId",
                     "assetId",
                     "deploymentId",
@@ -20089,7 +20120,6 @@
                   "required": [
                     "paymentId",
                     "gameId",
-                    "playerId",
                     "orderId",
                     "assetId",
                     "deploymentId",

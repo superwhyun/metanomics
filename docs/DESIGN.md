@@ -80,7 +80,9 @@ Order(string orderId,string sku,string name,uint256 quantity)
 
 `orderHash`는 Order의 EIP-712 구조체 해시이다. 토큰 사용 승인은 Common Game Credit 토큰의 별도 ERC-2612 도메인을 사용하고, spender는 정산 계약이다. 결제·예치의 업무 승인 없이 permit만으로 자금을 이동할 수 없다. 선제출된 permit은 허용된 allowance로 진행하며, 동시 permit nonce 충돌은 같은 결제의 승인 재제출로 복구한다. 일반 개인키 EVM 지갑만 지원한다.
 
-지갑 연결 메시지는 서비스 origin·이용자·주소·체인·목적·무작위 nonce·5분 만료에 묶는다. 계정 연결 코드는 대상 게임과 이용자에 묶고 5분간 한 번만 교환한다. 검증 및 소비는 DB 거래로 보호한다.
+게임은 자신의 origin·주소·체인·무작위 nonce·5분 만료에 묶인 지갑 로그인 서명을 검증하고 자체 세션을 발급한다. 일반 이용자는 포털 사전 가입이나 게임별 연결 코드 없이 게임에 지갑으로 로그인한다. 게임 서버가 세션에서 확인한 지갑을 보상 `recipient`, 주문 `payer`로 지정하고 자기 게임의 API 키로 요청한다. 결제는 이 payer의 별도 EIP-712 서명이 있어야 실행되며, 게임 서버가 서명을 중계할 수 있다. 포털은 같은 지갑으로 로그인하면 과거 주소 기반 보상·결제까지 조회하는 선택 화면이다.
+
+기존 `playerId` 연동의 지갑 연결 메시지는 서비스 origin·이용자·주소·체인·목적·무작위 nonce·5분 만료에 묶는다. 기존 계정 연결 코드는 대상 게임과 이용자에 묶고 5분간 한 번만 교환한다. 이는 호환 경로이며 새 주소 기반 게임 연동에서는 요구하지 않는다. 검증 및 소비는 DB 거래로 보호한다.
 
 ## 상태와 시간
 
@@ -108,15 +110,15 @@ Order(string orderId,string sku,string name,uint256 quantity)
 
 요청 키는 인증 주체·논리 API 경로·경로 매개변수에 묶는다. 검증된 요청을 키 정렬한 정규 JSON으로 해시한다. 같은 키나 업무 참조에 다른 내용이면 409다.
 
-| 업무          | 유일 제약                                                                       |
-| ------------- | ------------------------------------------------------------------------------- |
-| 보상          | gameId + rewardRef                                                              |
-| 주문          | gameId + orderId                                                                |
-| 예산 배분     | 요청 키만 (매 요청이 새 배분)                                                   |
-| 스크립트 배분 | gameId + period + weekly 또는 + additional + allocationRef (period를 보낼 때만) |
-| 추가 발행     | issuanceRef                                                                     |
-| 게임 계정     | gameId + gamePlayerId, gameId + playerId                                        |
-| 아이템 지급   | 게임 DB의 paymentId                                                             |
+| 업무          | 유일 제약                                                                             |
+| ------------- | ------------------------------------------------------------------------------------- |
+| 보상          | gameId + rewardRef                                                                    |
+| 주문          | gameId + orderId                                                                      |
+| 예산 배분     | 요청 키만 (매 요청이 새 배분)                                                         |
+| 스크립트 배분 | gameId + period + weekly 또는 + additional + allocationRef (period를 보낼 때만)       |
+| 추가 발행     | issuanceRef                                                                           |
+| 게임 계정     | 게임 자체 DB의 검증한 지갑 주소. 기존 연동만 gameId + gamePlayerId, gameId + playerId |
+| 아이템 지급   | 게임 DB의 paymentId                                                                   |
 
 업무 유일성은 배포 ID와 무관하게 유지한다. 작업마다 배포 설정, 수령 지갑, 금액, 서명 내용을 고정한다. 등록된 배포 ID의 설정을 덮어쓰지 않는다.
 

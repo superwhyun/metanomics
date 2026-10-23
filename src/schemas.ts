@@ -91,7 +91,6 @@ export const paymentSchema = open(
   [
     "paymentId",
     "gameId",
-    "playerId",
     "orderId",
     "assetId",
     "deploymentId",

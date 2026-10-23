@@ -18,7 +18,8 @@
     "openapi": "tsx scripts/openapi.ts",
     "format": "prettier --write src scripts tests web public/*.html public/*.css package.json tsconfig.json README.md docs/*.md",
     "format:check": "prettier --check src scripts tests web public/*.html public/*.css package.json tsconfig.json README.md docs/*.md",
-    "test:wallet-aliases:web": "npm run build:web && tsx --test tests/ui/wallet-aliases.test.ts"
+    "test:wallet-aliases:web": "npm run build:web && tsx --test tests/ui/wallet-aliases.test.ts",
+    "test:web": "npm run build:web && tsx --test tests/ui/*.test.ts"
   },
   "dependencies": {
     "@fastify/static": "10.1.6",

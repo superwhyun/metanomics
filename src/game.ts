@@ -2,8 +2,18 @@ import Fastify from "fastify";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
-import { AppError, id, opaque, sha, json, canonical, ASSET } from "./shared.js";
+import {
+  AppError,
+  id,
+  opaque,
+  sha,
+  json,
+  canonical,
+  ASSET,
+  requireThat,
+} from "./shared.js";
 import { passwordHash, passwordMatches } from "./auth.js";
+import { GameWalletAuth } from "./game-wallet-auth.js";
 
 export class NetworkClient {
   constructor(
@@ -54,7 +64,19 @@ export class DemoGame {
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,account_id TEXT,score INTEGER,created_at INTEGER);
       CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY,account_id TEXT,payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS recovery_locks(payment_id TEXT PRIMARY KEY,evidence_hash TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS wallet_challenges(id TEXT PRIMARY KEY,payload TEXT NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL,used INTEGER NOT NULL DEFAULT 0);
     `);
+    if (
+      !this.all("PRAGMA table_info(accounts)").some(
+        (column) => column.name === "wallet",
+      )
+    )
+      this.db.exec(
+        "ALTER TABLE accounts ADD COLUMN wallet TEXT COLLATE NOCASE",
+      );
+    this.db.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS game_wallet_identity ON accounts(wallet COLLATE NOCASE) WHERE wallet IS NOT NULL",
+    );
     this.run(
       "INSERT OR IGNORE INTO accounts(id,username,password_hash) VALUES(?,?,?)",
       "pilot",
@@ -89,11 +111,20 @@ export class DemoGame {
         "NOT_CLAIMED",
         "지급 시작이 확정되지 않았습니다.",
       );
-    const account = this.get(
-      "SELECT * FROM accounts WHERE player_id=?",
-      pay.playerId,
+    const orderOwner = this.get(
+      "SELECT account_id FROM orders WHERE id=?",
+      pay.orderId,
     );
+    const account =
+      orderOwner &&
+      this.get("SELECT * FROM accounts WHERE id=?", orderOwner.account_id);
     if (!account) throw new Error("Unknown game account");
+    if (
+      account.wallet
+        ? account.wallet.toLowerCase() !== String(pay.payer).toLowerCase()
+        : account.player_id !== pay.playerId
+    )
+      throw new Error("Order payer mismatch");
     this.transaction(() => {
       if (
         this.get(
@@ -232,7 +263,16 @@ export class DemoGame {
       this.busy = false;
     }
   }
-  async app() {
+  async app(options: { origin?: string; chainId?: number } = {}) {
+    const origin = new URL(
+      options.origin ??
+        `http://localhost:${this.gameId === "game-a" ? 3401 : 3402}`,
+    ).origin;
+    const walletAuth = new GameWalletAuth(
+      this,
+      origin,
+      options.chainId ?? 31337,
+    );
     const app = Fastify({
       ajv: { customOptions: { removeAdditional: false } },
     });
@@ -243,6 +283,65 @@ export class DemoGame {
           message: e.status ? e.message : "게임 요청 처리에 실패했습니다.",
         },
       }),
+    );
+    const loginAttempts = new Map<string, { count: number; until: number }>();
+    app.addHook("onRequest", async (req) => {
+      if (
+        !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
+        req.headers.origin
+      )
+        requireThat(req.headers.origin === origin, 403, "ORIGIN_DENIED");
+      if (req.method === "POST" && req.url.startsWith("/sessions/wallet")) {
+        const now = Date.now();
+        for (const [ip, entry] of loginAttempts)
+          if (entry.until <= now) loginAttempts.delete(ip);
+        const entry = loginAttempts.get(req.ip) ?? {
+          count: 0,
+          until: now + 60_000,
+        };
+        requireThat(
+          entry.count < 60 &&
+            (loginAttempts.has(req.ip) || loginAttempts.size < 1000),
+          429,
+          "AUTH_RATE_LIMITED",
+        );
+        entry.count++;
+        loginAttempts.set(req.ip, entry);
+      }
+    });
+    app.post(
+      "/sessions/wallet/challenges",
+      {
+        schema: {
+          body: {
+            type: "object",
+            additionalProperties: false,
+            required: ["address"],
+            properties: {
+              address: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+            },
+          },
+        },
+      },
+      async (req: any) => walletAuth.challenge(req.body.address),
+    );
+    app.post(
+      "/sessions/wallet",
+      {
+        schema: {
+          body: {
+            type: "object",
+            additionalProperties: false,
+            required: ["challengeId", "signature"],
+            properties: {
+              challengeId: { type: "string", minLength: 1, maxLength: 200 },
+              signature: { type: "string", pattern: "^0x[0-9a-fA-F]{130}$" },
+            },
+          },
+        },
+      },
+      async (req: any) =>
+        walletAuth.finish(req.body.challengeId, req.body.signature),
     );
     app.post(
       "/sessions",
@@ -327,6 +426,7 @@ export class DemoGame {
       return {
         gameId: this.gameId,
         playerId: a.player_id,
+        address: a.wallet ?? null,
         score: a.score,
         inventory: this.all(
           "SELECT sku,quantity FROM inventory WHERE account_id=?",
@@ -375,11 +475,15 @@ export class DemoGame {
     );
     app.post("/weekly-reward", async (req) => {
       const a = accountOf(req);
-      if (this.gameId !== "game-a" || !a.player_id || a.score < 1)
+      if (
+        this.gameId !== "game-a" ||
+        (!a.wallet && !a.player_id) ||
+        a.score < 1
+      )
         throw new AppError(
           409,
           "NOT_ELIGIBLE",
-          "게임 플레이와 계정 연결이 필요합니다.",
+          "지갑으로 로그인한 뒤 게임을 플레이하세요.",
         );
       const day = new Date();
       day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
@@ -399,7 +503,7 @@ export class DemoGame {
       return this.network.call(
         `/games/${this.gameId}/rewards`,
         {
-          playerId: a.player_id,
+          ...(a.wallet ? { recipient: a.wallet } : { playerId: a.player_id }),
           assetId: ASSET,
           amount: "10.000000",
           rewardRef,
@@ -425,10 +529,14 @@ export class DemoGame {
       },
       async (req: any) => {
         const a = accountOf(req);
-        if (this.gameId !== "game-b" || !a.player_id)
-          throw new AppError(409, "NOT_ELIGIBLE", "게임 B 계정을 연결하세요.");
+        if (this.gameId !== "game-b" || (!a.wallet && !a.player_id))
+          throw new AppError(
+            409,
+            "NOT_ELIGIBLE",
+            "게임 B에 지갑으로 로그인하세요.",
+          );
         const payload = {
-          playerId: a.player_id,
+          ...(a.wallet ? { payer: a.wallet } : { playerId: a.player_id }),
           orderId: req.body.orderId,
           assetId: ASSET,
           amount: "4.000000",
@@ -458,6 +566,65 @@ export class DemoGame {
         );
       },
     );
+    app.get("/orders/:orderId", async (req: any) => {
+      const account = accountOf(req);
+      const order = this.get(
+        "SELECT * FROM orders WHERE id=? AND account_id=?",
+        req.params.orderId,
+        account.id,
+      );
+      requireThat(order, 404, "ORDER_NOT_FOUND");
+      const list = await this.network.call(
+        `/games/${this.gameId}/payments?orderId=${encodeURIComponent(order.id)}`,
+      );
+      const payment = list.payments.find(
+        (pay: any) => pay.orderId === order.id,
+      );
+      requireThat(payment, 404, "PAYMENT_NOT_FOUND");
+      return this.network.call(
+        `/payments/${encodeURIComponent(payment.paymentId)}`,
+      );
+    });
+    app.post(
+      "/orders/:orderId/authorizations",
+      {
+        schema: {
+          body: {
+            type: "object",
+            additionalProperties: false,
+            required: ["signature"],
+            properties: {
+              signature: { type: "string", pattern: "^0x[0-9a-fA-F]{130}$" },
+              permitSignature: {
+                type: "string",
+                pattern: "^0x[0-9a-fA-F]{130}$",
+              },
+              permitDeadline: { type: "integer", minimum: 1 },
+            },
+          },
+        },
+      },
+      async (req: any) => {
+        const account = accountOf(req);
+        const order = this.get(
+          "SELECT * FROM orders WHERE id=? AND account_id=?",
+          req.params.orderId,
+          account.id,
+        );
+        requireThat(order, 404, "ORDER_NOT_FOUND");
+        // A retry of the original order recovers its payment without creating another order.
+        const payment = await this.network.call(
+          `/games/${this.gameId}/payments`,
+          JSON.parse(order.payload),
+          `order:${order.id}`,
+        );
+        return this.network.call(
+          `/payments/${encodeURIComponent(payment.paymentId)}/authorizations`,
+          req.body,
+          `authorize:${payment.paymentId}:${sha(json(req.body))}`,
+        );
+      },
+    );
     app.post("/bonus", async (req) => {
       const a = accountOf(req);
       if (
@@ -475,7 +642,7 @@ export class DemoGame {
       return this.network.call(
         `/games/${this.gameId}/rewards`,
         {
-          playerId: a.player_id,
+          ...(a.wallet ? { recipient: a.wallet } : { playerId: a.player_id }),
           assetId: ASSET,
           amount: "1.000000",
           rewardRef: `first-purchase:${a.id}`,

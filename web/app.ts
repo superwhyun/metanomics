@@ -3,7 +3,7 @@ import {
   renderAccountChoices,
   renderLoginWallets,
 } from "./wallet-aliases.js";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount } from "viem/accounts";
 import { formatEther, getAddress, keccak256, parseEther, toHex } from "viem";
 import { openTableRow, renderTable } from "./table.js";
 import { initAllocation, renderAllocation } from "./allocation.js";
@@ -103,9 +103,9 @@ const TAB_HEADINGS: Record<Role, Record<string, [string, string]>> = {
   player: {
     play: [
       "게임과 보상",
-      "게임 계정을 연결하고, 보상으로 받은 공통 코인(CGC)을 다른 게임에서 사용하세요.",
+      "게임에서 지갑으로 로그인하고, 받은 CGC를 다른 게임에서도 사용하세요.",
     ],
-    account: ["지갑·계정", "보상 받을 지갑과 로그인 지갑을 관리합니다."],
+    account: ["지갑·계정", "조회할 지갑과 로그인 지갑의 별명을 관리합니다."],
     apply: [
       "게임 운영자 신청",
       "게임을 등록하고 보상 예산을 운영하려면 운영자 승인을 받으세요.",
@@ -462,26 +462,6 @@ async function signTyped(request: any) {
     ],
   });
 }
-async function linkWallet() {
-  if (!address) await connectWallet();
-  const challenge = await api("/wallet-links/challenges", {
-    address,
-    deploymentId: asset.activeDeploymentId,
-  });
-  const signature = localAccount
-    ? await localAccount.signMessage({ message: challenge.message })
-    : await (
-        await signingProvider()
-      ).request({
-        method: "personal_sign",
-        params: [toHex(challenge.message), address],
-      });
-  await api("/wallet-links", { challengeId: challenge.challengeId, signature });
-  $("#wallet-status").textContent = short(address!);
-  await refreshPlayer();
-  await refreshLoginWallets();
-  toast("지갑이 연결됐습니다.");
-}
 async function refreshLoginWallets() {
   const epoch = sessionEpoch;
   const result = await api("/account/login-wallets");
@@ -537,15 +517,6 @@ function saveSession(
 }
 const gameName = (gameId: string) =>
   catalogGames.find((g) => g.id === gameId)?.name ?? gameId;
-async function issueLinkCode(gameId: string) {
-  const result = await api("/player-links/codes", { gameId });
-  const slot = document.querySelector<HTMLElement>(
-    `[data-link-slot="${gameId}"]`,
-  );
-  if (!slot) return;
-  const until = new Date(Date.now() + result.expiresIn * 1000);
-  slot.innerHTML = `<div class="link-code"><span>연결 코드</span><code>${esc(result.code)}</code><button type="button" class="quiet" data-copy="${esc(result.code)}" data-copy-label="연결 코드">복사</button></div><p class="muted">${until.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}까지 게임의 계정 연결 화면에 입력하세요. 한 번만 사용할 수 있습니다.</p>`;
-}
 async function waitOperation(operationId: string) {
   for (let i = 0; i < 100; i++) {
     const op = await api(`/operations/${operationId}`);
@@ -564,15 +535,14 @@ async function refreshPlayer() {
     api("/operator-applications"),
   ]);
   catalogGames = catalog.games;
-  const linked = new Set<string>(activity.links.map((l: any) => l.gameId));
-  renderCatalog(catalog.games, linked);
+  renderCatalog(catalog.games);
   renderOperatorApplication(applications.applications[0]);
   const current = balances.balances.find(
     (b: any) => b.deploymentId === asset.activeDeploymentId,
   );
   $("#balance").textContent = current?.amount ? format(current.amount) : "0";
   if (current?.address)
-    $("#wallet-status").textContent = `${short(current.address)} · 지갑 연결됨`;
+    $("#wallet-status").textContent = `${short(current.address)} · 조회 중`;
   const rows = [
     ...activity.payments.map((p: any) => ({
       label: `${gameName(p.game_id)} · ${p.payload.item.name} · ${format(p.payload.amount)} CGC`,
@@ -613,7 +583,6 @@ async function refreshPlayer() {
   updatePlayerGuide({
     walletAddress: current?.address,
     games: catalog.games,
-    linked,
     payments: activity.payments,
     rewards: activity.rewards,
   });
@@ -622,12 +591,10 @@ const PURCHASED = ["PAID", "DELIVERY_CLAIMED", "COMPLETED"];
 function updatePlayerGuide(state: {
   walletAddress?: string;
   games: any[];
-  linked: Set<string>;
   payments: any[];
   rewards: any[];
 }) {
-  const unlinked = state.games.filter((g) => !state.linked.has(g.id));
-  const playable = state.games.find((g) => state.linked.has(g.id) && g.playUrl);
+  const playable = state.games.find((g) => g.playUrl);
   const purchased = state.payments.some((p) => PURCHASED.includes(p.status));
   const waitingPayment = state.payments.find((p) => p.status === "CREATED");
   const launch = playable
@@ -638,36 +605,25 @@ function updatePlayerGuide(state: {
     : undefined;
   const steps: Step[] = [
     {
-      title: "보상 받을 지갑 연결",
-      detail: "Ronin Wallet 등 지갑을 연결하면 코인이 이 지갑으로 들어옵니다.",
-      done: !!state.walletAddress,
-      action: { label: "지갑 연결", click: "#connect-wallet" },
-    },
-    {
-      title: "게임 계정 연결",
+      title: "게임에서 지갑으로 로그인",
       detail: state.games.length
-        ? `${state.games.length}개 게임 중 ${state.linked.size}개 연결됨 · 카드에서 연결 코드를 받아 게임의 계정 연결 화면에 입력하세요.`
-        : "아직 참여할 수 있는 게임이 없습니다. 게임이 등록되면 이곳에 표시됩니다.",
-      done: state.linked.size > 0,
-      action: unlinked.length
-        ? {
-            label: "연결 코드 받기",
-            click: `[data-link-code="${unlinked[0].id}"]`,
-          }
-        : undefined,
+        ? "참여 게임을 열고 지갑으로 로그인하세요. 별도 이용자 등록이나 연결 코드는 필요 없습니다."
+        : "참여 게임이 등록되면 이곳에서 열 수 있습니다.",
+      done: state.rewards.length > 0 || state.payments.length > 0,
+      action: launch,
     },
     {
-      title: "게임에서 코인 얻기",
+      title: "게임에서 CGC 받기",
       detail:
-        "연결한 게임의 보상 조건(랭킹, 미션 등)을 달성하면 공통 코인이 지급됩니다.",
+        "게임의 보상 조건을 달성하면 로그인한 지갑 주소로 CGC가 지급됩니다.",
       done: state.rewards.length > 0,
       action: launch,
     },
     {
-      title: "공통 코인으로 구매",
+      title: "CGC로 구매하기",
       detail: waitingPayment
-        ? "결제 승인을 기다리는 주문이 있습니다."
-        : "게임 안에서 공통 코인 결제를 선택하면 이곳에서 지갑으로 승인합니다.",
+        ? "지갑 승인을 기다리는 주문이 있습니다."
+        : "게임에서 CGC 결제를 선택하고 지갑으로 승인하세요.",
       done: purchased,
       action: waitingPayment
         ? {
@@ -680,8 +636,8 @@ function updatePlayerGuide(state: {
   renderSteps("#player-steps", "#player-steps-progress", steps);
   setTabCount("play", waitingPayment ? 1 : 0);
 }
-function renderCatalog(games: any[], linked: Set<string>) {
-  const next = JSON.stringify([games, [...linked]]);
+function renderCatalog(games: any[]) {
+  const next = JSON.stringify(games);
   if (next === catalogKey) return;
   catalogKey = next;
   $("#catalog-count").textContent = String(games.length).padStart(2, "0");
@@ -689,26 +645,13 @@ function renderCatalog(games: any[], linked: Set<string>) {
     games
       .map((g, index) => {
         const color = index % 2 ? "b" : "a";
-        const isLinked = linked.has(g.id);
         const launch = g.playUrl
-          ? `<a class="${isLinked ? "primary" : ""} catalog-launch" href="${esc(g.playUrl)}" target="_blank" rel="noopener noreferrer" data-launch="${esc(g.id)}" aria-label="${esc(g.name)} 게임 실행">게임 실행 ↗</a>`
+          ? `<a class="primary catalog-launch" href="${esc(g.playUrl)}" target="_blank" rel="noopener noreferrer" data-launch="${esc(g.id)}" aria-label="${esc(g.name)} 게임 실행">게임 실행 ↗</a>`
           : '<span class="muted">게임 실행 주소 준비 중</span>';
-        const link = isLinked
-          ? '<span class="pill">✓ 계정 연결됨</span>'
-          : `<button type="button" class="primary" data-link-code="${esc(g.id)}">연결 코드 받기</button>`;
-        return `<article class="game-card game-${color}"><div class="game-art"><div class="planet planet-${color}"></div><div class="${color === "a" ? "art-grid" : "harbor-lines"}"></div><span class="genre">${esc(g.category)}</span><span class="game-monogram" aria-hidden="true">${esc(Array.from(String(g.name))[0] ?? "")}</span></div><div class="game-content"><div class="card-tags"><span class="eyebrow">${esc(g.id)}</span></div><h2>${esc(g.name)}</h2><p>${esc(g.description || "새로운 게임을 만나보세요.")}</p><div class="game-status">${esc(g.playUrl ? new URL(g.playUrl).host : "등록된 게임")}</div><div class="actions">${link}${launch}</div><div data-link-slot="${esc(g.id)}"></div></div></article>`;
+        return `<article class="game-card game-${color}"><div class="game-art"><div class="planet planet-${color}"></div><div class="${color === "a" ? "art-grid" : "harbor-lines"}"></div><span class="genre">${esc(g.category)}</span><span class="game-monogram" aria-hidden="true">${esc(Array.from(String(g.name))[0] ?? "")}</span></div><div class="game-content"><div class="card-tags"><span class="eyebrow">${esc(g.id)}</span></div><h2>${esc(g.name)}</h2><p>${esc(g.description || "새로운 게임을 만나보세요.")}</p><div class="game-status">${esc(g.playUrl ? new URL(g.playUrl).host : "등록된 게임")}</div><div class="actions">${launch}</div><p class="muted">게임에서 지갑으로 로그인하면 그 주소로 보상을 받습니다.</p></div></article>`;
       })
       .join("") ||
-    '<div class="panel empty-state"><h2>아직 참여할 수 있는 게임이 없습니다</h2><p class="muted">게임 운영자가 게임을 등록하고 관리자 승인이 끝나면 이곳에 표시됩니다.</p></div>';
-  document
-    .querySelectorAll<HTMLButtonElement>("[data-link-code]")
-    .forEach(
-      (b) =>
-        (b.onclick = () =>
-          void issueLinkCode(b.dataset.linkCode!).catch((e) =>
-            toast(e.message, true),
-          )),
-    );
+    '<div class="panel empty-state"><h2>아직 참여할 수 있는 게임이 없습니다</h2><p class="muted">게임이 등록되면 이곳에서 바로 실행할 수 있습니다.</p></div>';
 }
 function renderOperatorApplication(latest: any) {
   const status = $("#operator-application-status");
@@ -820,7 +763,7 @@ async function refreshOperator() {
     views
       .map(({ game, actions, payments, rewards, credentials }) => {
         const liveCredentials = credentials.filter((c: any) => !c.revoked);
-        return `<article class="panel operator-game"><header class="operator-game-head"><div><span class="eyebrow">${esc(game.id)}</span><h2>${esc(game.name)}</h2></div>${pill(game.active ? "ACTIVE" : "INACTIVE")}</header><div class="mini-stats"><div><strong class="loading" data-budget-available="${esc(game.id)}">확인 중</strong><span>사용 가능 예산 CGC</span></div><div><strong class="loading" data-budget-reserved="${esc(game.id)}">확인 중</strong><span>지급·인출 대기</span></div><div><strong class="${payments.length ? "warn" : ""}">${payments.length}</strong><span>미완료 결제</span></div></div><div class="operator-game-body"><section class="op-block"><h3><span class="op-num">1</span>보상 예산</h3><p class="muted">이용자 보상은 이 예산에서 지급됩니다. 예치·인출은 승인 지갑으로 서명합니다.</p><form class="operator-form" data-budget-form="${esc(game.id)}"><label>금액 (CGC)<input name="amount" value="1.000000" required></label><label>작업<select name="kind"><option value="deposits">추가 예치</option><option value="withdrawals">예산 인출</option></select></label><button type="submit" class="primary">지갑으로 승인</button></form></section><section class="op-block"><h3><span class="op-num">2</span>API 연동 ${liveCredentials.length ? `<span class="pill">사용 중 ${liveCredentials.length}</span>` : '<span class="pill pending">미발급</span>'}</h3><p class="muted">게임 서버가 계정 연결·보상·결제를 요청할 때 사용하는 자격증명입니다.</p><p class="doc-links"><a href="${INTEGRATION_GUIDE_URL}" target="_blank" rel="noopener">연동 가이드 ↗</a><a href="/docs" target="_blank" rel="noopener">API 레퍼런스 ↗</a></p><button data-credential="${esc(game.id)}" class="${liveCredentials.length ? "" : "primary"}">API 자격증명 발급 ↗</button><div id="credential-${esc(game.id)}"></div>${credentials.map((c: any) => `<div class="activity-row"><div><strong>${esc(c.label || "이름 없음")}</strong><small>${c.createdAt ? `${day(c.createdAt)} 발급 · ` : ""}${esc(c.scopes.join(", "))}</small></div><button data-revoke-existing="${esc(c.id)}" data-game="${esc(game.id)}" class="quiet">폐기</button></div>`).join("")}</section></div><details class="op-history"${payments.length ? " open" : ""}><summary>최근 내역 · 미완료 결제 ${payments.length}건</summary><div class="op-history-grid"><div><h3>미완료 결제</h3>${payments.map((p: any) => `<div class="activity-row"><div><strong>${esc(p.item.name)}</strong><small>${esc(p.paymentId)}</small></div>${pill(p.status)}</div>`).join("") || '<p class="muted">미완료 결제가 없습니다.</p>'}</div><div><h3>보상 지급 결과</h3>${
+        return `<article class="panel operator-game"><header class="operator-game-head"><div><span class="eyebrow">${esc(game.id)}</span><h2>${esc(game.name)}</h2></div>${pill(game.active ? "ACTIVE" : "INACTIVE")}</header><div class="mini-stats"><div><strong class="loading" data-budget-available="${esc(game.id)}">확인 중</strong><span>사용 가능 예산 CGC</span></div><div><strong class="loading" data-budget-reserved="${esc(game.id)}">확인 중</strong><span>지급·인출 대기</span></div><div><strong class="${payments.length ? "warn" : ""}">${payments.length}</strong><span>미완료 결제</span></div></div><div class="operator-game-body"><section class="op-block"><h3><span class="op-num">1</span>보상 예산</h3><p class="muted">이용자 보상은 이 예산에서 지급됩니다. 예치·인출은 승인 지갑으로 서명합니다.</p><form class="operator-form" data-budget-form="${esc(game.id)}"><label>금액 (CGC)<input name="amount" value="1.000000" required></label><label>작업<select name="kind"><option value="deposits">추가 예치</option><option value="withdrawals">예산 인출</option></select></label><button type="submit" class="primary">지갑으로 승인</button></form></section><section class="op-block"><h3><span class="op-num">2</span>API 연동 ${liveCredentials.length ? `<span class="pill">사용 중 ${liveCredentials.length}</span>` : '<span class="pill pending">미발급</span>'}</h3><p class="muted">게임 서버가 지갑 주소로 보상·결제를 요청할 때 사용하는 자격증명입니다.</p><p class="doc-links"><a href="${INTEGRATION_GUIDE_URL}" target="_blank" rel="noopener">연동 가이드 ↗</a><a href="/docs" target="_blank" rel="noopener">API 레퍼런스 ↗</a></p><button data-credential="${esc(game.id)}" class="${liveCredentials.length ? "" : "primary"}">API 자격증명 발급 ↗</button><div id="credential-${esc(game.id)}"></div>${credentials.map((c: any) => `<div class="activity-row"><div><strong>${esc(c.label || "이름 없음")}</strong><small>${c.createdAt ? `${day(c.createdAt)} 발급 · ` : ""}${esc(c.scopes.join(", "))}</small></div><button data-revoke-existing="${esc(c.id)}" data-game="${esc(game.id)}" class="quiet">폐기</button></div>`).join("")}</section></div><details class="op-history"${payments.length ? " open" : ""}><summary>최근 내역 · 미완료 결제 ${payments.length}건</summary><div class="op-history-grid"><div><h3>미완료 결제</h3>${payments.map((p: any) => `<div class="activity-row"><div><strong>${esc(p.item.name)}</strong><small>${esc(p.paymentId)}</small></div>${pill(p.status)}</div>`).join("") || '<p class="muted">미완료 결제가 없습니다.</p>'}</div><div><h3>보상 지급 결과</h3>${
           rewards
             .slice(0, 5)
             .map(
@@ -958,7 +901,7 @@ function renderOperatorOverview(registrations: any[], views: any[]) {
     {
       title: "API 자격증명 발급",
       detail:
-        "게임 서버에 넣을 자격증명을 발급해 계정 연결·보상·결제를 연동합니다.",
+        "게임 서버에 넣을 자격증명을 발급해 주소 기반 보상·결제를 연동합니다.",
       done: hasCredential,
       action: first
         ? {
@@ -1746,22 +1689,6 @@ async function resetWalletConnection() {
 }
 on("#reset-wallet", "click", resetWalletConnection);
 on("#reset-account-wallet", "click", resetWalletConnection);
-on("#connect-wallet", "click", async () => {
-  await connectWallet("이 지갑으로 공통 코인 보상을 받습니다.");
-  await linkWallet();
-});
-on("#create-wallet", "click", async () => {
-  if (!asset.deployments.some((d: any) => d.finality === "local"))
-    throw new Error("로컬에서만 사용할 수 있습니다.");
-  localAccount = privateKeyToAccount(generatePrivateKey());
-  walletProvider = undefined;
-  walletChainId = undefined;
-  address = localAccount.address;
-  await linkWallet();
-  toast(
-    "브라우저 메모리에 테스트 지갑을 만들었습니다. 새로고침하면 이 키는 사라집니다.",
-  );
-});
 on("#connect-signer", "click", () =>
   connectWallet("이 지갑으로 예치·인출·공동 승인 같은 계약 작업에 서명합니다."),
 );
@@ -2163,7 +2090,6 @@ async function boot() {
   );
   $("#chain-badge").textContent =
     d?.finality === "local" ? "LOCAL TESTNET" : "SAIGON TESTNET";
-  show("#create-wallet", d?.finality === "local");
   if (token) await mount();
 }
 void boot().catch((e) => {
