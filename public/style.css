@@ -1098,6 +1098,102 @@ body[data-role] .primary {
 .credential-form label {
   flex: 1 1 200px;
 }
+.integration-card h2 {
+  margin: 5px 0 0;
+}
+.connection-fields {
+  display: grid;
+  gap: 12px;
+  margin: 22px 0 12px;
+}
+.connection-field {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-deep, #0b1322);
+}
+.connection-field strong,
+.connection-field small {
+  display: block;
+}
+.connection-field small,
+.connection-variable {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.connection-field code,
+.connection-output {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.connection-key {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.connection-key h3 {
+  margin-bottom: 4px;
+}
+.connection-issued:not(:empty) {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid var(--role);
+  border-radius: 12px;
+}
+.connection-issued input[readonly] {
+  font-family: monospace;
+}
+.connection-issued .actions {
+  margin: 12px 0;
+}
+.connection-preview {
+  margin-top: 24px;
+}
+.connection-preview summary,
+.connection-issued summary {
+  cursor: pointer;
+  color: var(--role);
+  font-weight: 600;
+}
+.connection-output {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #080e1a;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.connection-next {
+  margin-top: 24px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.connection-credentials small {
+  display: block;
+  margin-top: 4px;
+}
+.integration-card .doc-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+@media (max-width: 650px) {
+  .connection-field {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+  .connection-field > div {
+    grid-column: 1 / -1;
+  }
+  .connection-issued:not(:empty) {
+    padding: 12px;
+  }
+}
 .op-block .operator-form {
   margin: 0;
 }
