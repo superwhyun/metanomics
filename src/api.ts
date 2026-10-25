@@ -34,6 +34,7 @@ import {
   walletOwner,
 } from "./wallet-auth.js";
 import { responseSchema } from "./schemas.js";
+import { playerBalance } from "./player-balance.js";
 import {
   MONTHLY_LAST_DAY,
   firstRun,
@@ -1603,7 +1604,7 @@ export async function createApi(
   route(
     "GET",
     "/players/me/balances",
-    "본인 배포별 확정 잔액",
+    "본인 배포별 최신 잔액·최종 확정 잔액·확정 전 순변동",
     null,
     async (_req, _reply, p) => {
       only(p, "player");
@@ -1621,14 +1622,11 @@ export async function createApi(
                 deploymentId: a.deployment.id,
                 walletRequired: true,
               };
-            const block = await a.finalBlock();
             return {
               assetId: ASSET,
               deploymentId: a.deployment.id,
               address: w.address,
-              amount: display(await a.getBalance(w.address, block.number)),
-              blockNumber: block.number.toString(),
-              finalized: true,
+              ...(await playerBalance(a, w.address)),
             };
           }),
         ),

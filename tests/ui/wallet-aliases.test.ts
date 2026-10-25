@@ -39,6 +39,7 @@ async function fixture(
       settlement: wallets[1].address,
     },
     finalBlock: async () => ({ number: 1n }),
+    latestBlock: async () => ({ number: 2n }),
     getBalance: async () => 0n,
   };
   const origin = `http://127.0.0.1:${await freePort()}`;
@@ -123,8 +124,72 @@ async function fixture(
       alias.trim().replace(/\s+/gu, " "),
     );
   };
-  return { page, store, openChoices, finishLogin, form, save };
+  return { page, store, adapter, openChoices, finishLogin, form, save };
 }
+
+test("player balance shows latest tokens and signed provisional changes, with honest RPC failure states", async (t) => {
+  const f = await fixture(t);
+  f.adapter.getBalance = async (_address: string, block: bigint) =>
+    block === 2n ? 12_000_000n : 7_000_000n;
+  await f.openChoices();
+  await f.finishLogin();
+  await f.page.locator('[data-nav="play"]').click();
+  await expect(f.page.locator("#balance")).toHaveText("12");
+  await expect(f.page.locator("#balance-kind")).toHaveText("CGC · 최신 잔액");
+  await expect(f.page.locator("#balance-finalized")).toHaveText(
+    "최종 확정 7 CGC",
+  );
+  await expect(f.page.locator("#balance-pending")).toHaveText(
+    "확정 전 변동 +5 CGC",
+  );
+  mkdirSync("artifacts", { recursive: true });
+  await f.page.screenshot({
+    path: "artifacts/player-live-balance.png",
+    fullPage: true,
+  });
+
+  f.adapter.getBalance = async (_address: string, block: bigint) =>
+    block === 2n ? 6_000_000n : 7_000_000n;
+  await f.page.locator("#refresh-player").click();
+  await expect(f.page.locator("#balance")).toHaveText("6");
+  await expect(f.page.locator("#balance-pending")).toHaveText(
+    "확정 전 변동 -1 CGC",
+  );
+  f.adapter.getBalance = async () => 7_000_000n;
+  await f.page.locator("#refresh-player").click();
+  await expect(f.page.locator("#balance")).toHaveText("7");
+  await expect(f.page.locator("#balance-pending")).toBeHidden();
+  f.adapter.finalBlock = async () => {
+    throw new Error("finality RPC down");
+  };
+  f.adapter.getBalance = async () => 12_000_000n;
+  await f.page.locator("#refresh-player").click();
+  await expect(f.page.locator("#balance")).toHaveText("12");
+  await expect(f.page.locator("#balance-finalized")).toHaveText(
+    "최종 확정 잔액 조회 불가",
+  );
+  await expect(f.page.locator("#balance-pending")).toHaveText(
+    "확정 전 변동을 계산할 수 없습니다.",
+  );
+  f.adapter.finalBlock = async () => ({ number: 1n });
+  f.adapter.latestBlock = async () => {
+    throw new Error("latest RPC down");
+  };
+  f.adapter.getBalance = async () => 7_000_000n;
+  await f.page.locator("#refresh-player").click();
+  await expect(f.page.locator("#balance-kind")).toHaveText("CGC · 확정 잔액");
+  await expect(f.page.locator("#balance-finalized")).toContainText(
+    "최신 잔액 조회 불가",
+  );
+  f.adapter.finalBlock = async () => {
+    throw new Error("all RPC down");
+  };
+  await f.page.locator("#refresh-player").click();
+  await expect(f.page.locator("#balance")).toHaveText("—");
+  await expect(f.page.locator("#balance-finalized")).toContainText(
+    "잔액을 확인하지 못했습니다",
+  );
+});
 
 test("player catalog launches games directly and never asks for a game link code or reward-wallet enrollment", async (t) => {
   const f = await fixture(t);

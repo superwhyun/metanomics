@@ -39,6 +39,7 @@ export interface ChainAdapter {
     maxLogBlockRange: number;
   };
   finalBlock(): Promise<any>;
+  latestBlock(): Promise<any>;
   getBalance(address: Address, blockNumber?: bigint): Promise<bigint>;
   getGameBudget(gameId: string, blockNumber?: bigint): Promise<bigint>;
   prepareWalletProof(input: {
@@ -195,6 +196,22 @@ export class EvmAdapter implements ChainAdapter {
       primaryType: kind,
       message,
     };
+  }
+  async latestBlock() {
+    try {
+      if ((await this.publicClient.getChainId()) !== this.deployment.chainId)
+        throw new Error("RPC chain ID mismatch");
+      const block = await this.publicClient.getBlock({ blockTag: "latest" });
+      if (!block.hash || block.number === null)
+        throw new Error("Latest block unavailable");
+      return block;
+    } catch {
+      throw new AppError(
+        503,
+        "LATEST_BALANCE_UNAVAILABLE",
+        "최신 잔액을 확인할 수 없습니다.",
+      );
+    }
   }
   async finalBlock() {
     try {

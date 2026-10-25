@@ -328,7 +328,20 @@ export function responseSchema(method: string, path: string): any {
               assetId: text,
               deploymentId: text,
               address: text,
-              amount: text,
+              amount: {
+                ...text,
+                description:
+                  "Finalized balance (legacy field), omitted if finality cannot be read.",
+              },
+              latestAmount: text,
+              latestBlockNumber: text,
+              pendingDelta: {
+                ...text,
+                description:
+                  "Signed net change: latestAmount minus amount. Not a sum of pending reward requests.",
+              },
+              latestUnavailable: { type: "boolean" },
+              finalityUnavailable: { type: "boolean" },
               blockNumber: text,
               finalized: { type: "boolean" },
               walletRequired: { type: "boolean" },

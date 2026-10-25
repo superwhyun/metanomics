@@ -105,9 +105,14 @@
                 사용하세요.
               </p>
             </div>
-            <div class="balance-card">
+            <div class="balance-card" id="player-balance" aria-live="polite">
               <span>내 공통 코인</span><strong id="balance">—</strong
-              ><span class="muted">CGC · 확정 잔액</span>
+              ><span class="muted" id="balance-kind">CGC</span>
+              <small id="balance-finalized" class="muted">잔액 확인 중</small>
+              <small
+                id="balance-pending"
+                class="balance-pending hidden"
+              ></small>
             </div>
           </div>
           <section class="panel steps-panel" data-tab="play">

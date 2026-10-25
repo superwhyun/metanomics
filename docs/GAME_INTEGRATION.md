@@ -119,6 +119,10 @@ Challenge 접수 유효기간은 5분, 세션은 메시지 발급 후 최대 8�
 
 ### 외부 게임의 화면 구성
 
+포털의 `GET /v1/players/me/balances`는 이용자 세션 전용이며 게임 API 키로 조회할 수 없다. 화면의 주 잔액은 `latestAmount`(기준 블록 `latestBlockNumber`)이고, 기존 `amount`·`blockNumber`는 계속 최종 확정 잔액·블록이다. `pendingDelta`는 `latestAmount - amount`의 부호 있는 순변동 문자열이다. 아직 포함되지 않은 보상 요청의 합계가 아니며, 입금과 출금이 상쇄되어 0일 수도 있다. 미확정 잔액은 체인 재구성 시 바뀔 수 있으므로 보상 완료·아이템 지급 판정에 사용하지 않는다.
+
+최신 조회 실패는 `latestUnavailable`, 최종 확정 조회 실패는 `finalityUnavailable`로 알리며 확인하지 못한 금액·기준 블록과 계산 불가능한 `pendingDelta`는 생략한다. `finalized`는 기존 `amount`에 대응하는 확정 스냅샷의 조회 성공 여부이다. 수령 지갑이 없으면 기존처럼 `walletRequired: true`를 반환한다. 포털은 최신 조회 실패 시 확정 잔액을 표시하고, 둘 다 조회하지 못하면 금액을 0으로 대체하지 않는다.
+
 현재 API는 설정된 공통 포털 origin 이외의 브라우저 변경 요청을 `ORIGIN_DENIED`로 거절하고 범용 CORS를 제공하지 않는다. 공통 포털은 iframe 포함도 허용하지 않는다. 외부 게임 페이지에서 API로 직접 fetch하는 구성은 현재 그대로 사용할 수 없다. 서버 간 호출은 이 브라우저 origin 제약과 구분된다.
 
 외부 게임은 자신의 origin에서 지갑 로그인과 결제 서명을 처리한다. 게임 자체 세션으로 인증한 이용자의 주소·주문을 확인하고 Metanomic API 호출은 서버 API 키로 중계한다. 포털 세션 토큰이나 게임 API 키를 URL·브라우저에 전달하지 않는다. 별도 공통 로그인 리다이렉트나 연결 코드 입력 화면은 필요하지 않다.

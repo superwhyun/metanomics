@@ -13691,7 +13691,7 @@
     },
     "/v1/players/me/balances": {
       "get": {
-        "summary": "본인 배포별 확정 잔액",
+        "summary": "본인 배포별 최신 잔액·최종 확정 잔액·확정 전 순변동",
         "tags": [
           "players"
         ],
@@ -13725,7 +13725,24 @@
                             "type": "string"
                           },
                           "amount": {
+                            "type": "string",
+                            "description": "Finalized balance (legacy field), omitted if finality cannot be read."
+                          },
+                          "latestAmount": {
                             "type": "string"
+                          },
+                          "latestBlockNumber": {
+                            "type": "string"
+                          },
+                          "pendingDelta": {
+                            "type": "string",
+                            "description": "Signed net change: latestAmount minus amount. Not a sum of pending reward requests."
+                          },
+                          "latestUnavailable": {
+                            "type": "boolean"
+                          },
+                          "finalityUnavailable": {
+                            "type": "boolean"
                           },
                           "blockNumber": {
                             "type": "string"
@@ -13775,7 +13792,24 @@
                             "type": "string"
                           },
                           "amount": {
+                            "type": "string",
+                            "description": "Finalized balance (legacy field), omitted if finality cannot be read."
+                          },
+                          "latestAmount": {
                             "type": "string"
+                          },
+                          "latestBlockNumber": {
+                            "type": "string"
+                          },
+                          "pendingDelta": {
+                            "type": "string",
+                            "description": "Signed net change: latestAmount minus amount. Not a sum of pending reward requests."
+                          },
+                          "latestUnavailable": {
+                            "type": "boolean"
+                          },
+                          "finalityUnavailable": {
+                            "type": "boolean"
                           },
                           "blockNumber": {
                             "type": "string"

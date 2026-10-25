@@ -267,6 +267,14 @@ nav button.selected {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+.balance-card small {
+  margin-top: 7px;
+  max-width: 280px;
+  line-height: 1.6;
+}
+.balance-pending {
+  color: var(--role, var(--muted));
+}
 .connection-bar {
   display: flex;
   justify-content: space-between;

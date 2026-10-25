@@ -1,4 +1,5 @@
 import { renderOperatorIntegration } from "./operator-integration.js";
+import { renderPlayerBalance } from "./player-balance.js";
 import {
   WalletAliasCache,
   renderAccountChoices,
@@ -264,6 +265,7 @@ function resetSession() {
   stopWalletEvents = undefined;
   catalogKey = "";
   $("#operator-integration").replaceChildren();
+  renderPlayerBalance($("#player-balance"));
   show("#login-view", true);
   show("#workspace", false);
   show("#logout", false);
@@ -547,7 +549,7 @@ async function refreshPlayer() {
   const current = balances.balances.find(
     (b: any) => b.deploymentId === asset.activeDeploymentId,
   );
-  $("#balance").textContent = current?.amount ? format(current.amount) : "0";
+  renderPlayerBalance($("#player-balance"), current);
   if (current?.address)
     $("#wallet-status").textContent = `${short(current.address)} · 조회 중`;
   const rows = [
