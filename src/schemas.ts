@@ -160,6 +160,11 @@ const gameSchema = open(
     description: text,
     category: text,
     playUrl: text,
+    confirmations: {
+      anyOf: [{ type: "integer" }, { type: "null" }],
+      description:
+        "Operator-chosen settlement depth for rewards and payments; null follows the deployment.",
+    },
   },
   ["id", "name", "active", "description", "category", "playUrl"],
 );
@@ -251,6 +256,14 @@ export function responseSchema(method: string, path: string): any {
       : operatorApplicationSchema;
   if (path.endsWith("/rejections")) return registrationSchema;
   if (path.endsWith("/approvals")) return operationSchema;
+  if (path === "/games/:gameId/settlement")
+    return open(
+      {
+        gameId: text,
+        confirmations: { anyOf: [{ type: "integer" }, { type: "null" }] },
+      },
+      ["gameId", "confirmations"],
+    );
   if (method === "GET" && ["/games", "/operator/games"].includes(path))
     return open({ games: array(gameSchema) }, ["games"]);
   if (

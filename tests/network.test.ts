@@ -1962,7 +1962,10 @@ test("depth finality reports the block that many confirmations below the head an
     await f.chain.client.request({ method: "evm_mine", params: [] } as any);
   const head = await depthAdapter.latestBlock();
   const settled = await depthAdapter.finalBlock();
-  assert.equal(settled.number, head.number - 3n);
+  // One confirmation is the including block itself, so three sit 2 below the head.
+  assert.equal(settled.number, head.number - 2n);
+  assert.equal((await depthAdapter.finalBlock(1)).number, head.number);
+  assert.equal((await depthAdapter.finalBlock(2)).number, head.number - 1n);
   assert.equal(depthAdapter.capabilities().finality, "depth");
   // Near genesis the settled block never goes below block 0.
   const young = new EvmAdapter(
@@ -2020,12 +2023,93 @@ test("with depth finality a reward settles after the confirmation blocks without
       .status;
   for (let i = 0; i < 5; i++) await f.worker.tick();
   assert.equal(status(), "INCLUDED");
-  for (let i = 0; i < 3; i++)
-    await f.chain.client.request({ method: "evm_mine", params: [] } as any);
+  const mine = () =>
+    f.chain.client.request({ method: "evm_mine", params: [] } as any);
+  await mine();
+  for (let i = 0; i < 5; i++) await f.worker.tick();
+  assert.equal(status(), "INCLUDED");
+  await mine();
   await f.drain();
   assert.equal(status(), "FINALIZED");
   assert.equal(
     display(await f.adapter.getBalance(accounts.player.address)),
     "10.000000",
   );
+});
+
+test("an operator sets the settlement depth of their own game only", async (t) => {
+  const f = await fixture(t);
+  const put = (
+    token: string | null,
+    body: any,
+    expected = 200,
+    game = "game-a",
+  ) => f.call(token, "PUT", `/v1/games/${game}/settlement`, body, expected);
+  for (const confirmations of [0, 1001, 1.5, "3"])
+    await put(f.tokens.operator, { confirmations }, 422);
+  await put(f.tokens.player, { confirmations: 1 }, 403);
+  await put(f.tokens.admin, { confirmations: 1 }, 403);
+  await put(f.credentials["game-a"], { confirmations: 1 }, 403);
+  await put(null, { confirmations: 1 }, 401);
+  const listed = async () =>
+    (await f.call(f.tokens.operator, "GET", "/v1/operator/games")).games.find(
+      (g: any) => g.id === "game-a",
+    ).confirmations;
+  assert.equal(await listed(), null);
+  assert.deepEqual(await put(f.tokens.operator, { confirmations: 1 }), {
+    gameId: "game-a",
+    confirmations: 1,
+  });
+  assert.equal(await listed(), 1);
+  await put(f.tokens.operator, { confirmations: null });
+  assert.equal(await listed(), null);
+  assert.equal(
+    f.store.all("SELECT 1 FROM audit_events WHERE action='game.settlement'")
+      .length,
+    2,
+  );
+});
+
+test("a game with its own settlement depth settles rewards and payments without waiting for the deployment rule", async (t) => {
+  const f = await fixture(t);
+  await f.linkWallet();
+  await f.linkGames();
+  await f.allocate();
+  // The deployment would wait for 50 confirmations, which never arrive here.
+  for (let i = 0; i < 60; i++)
+    await f.chain.client.request({ method: "evm_mine", params: [] } as any);
+  Object.assign(f.adapter.deployment, { finality: "depth", confirmations: 50 });
+  const slow = await f.call(
+    f.credentials["game-a"],
+    "POST",
+    "/v1/games/game-a/rewards",
+    {
+      playerId: "player-001",
+      assetId: ASSET,
+      amount: "10.000000",
+      rewardRef: id("slow"),
+    },
+  );
+  const status = (operationId: string) =>
+    f.store.get("SELECT status FROM operations WHERE id=?", operationId).status;
+  for (let i = 0; i < 5; i++) await f.worker.tick();
+  assert.equal(status(slow.operationId), "INCLUDED");
+  for (const game of ["game-a", "game-b"])
+    await f.call(
+      f.tokens.operator,
+      "PUT",
+      `/v1/games/${game}/settlement`,
+      { confirmations: 1 },
+      200,
+    );
+  await f.drain();
+  assert.equal(status(slow.operationId), "FINALIZED");
+  const order = await f.payment();
+  await f.pay(order.paymentId);
+  const paid = await f.call(
+    f.tokens.player,
+    "GET",
+    `/v1/payments/${order.paymentId}`,
+  );
+  assert.equal(paid.status, "PAID");
 });

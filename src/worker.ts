@@ -4,6 +4,15 @@ import { EvmAdapter, NATIVE_TRANSFER_GAS } from "./chain.js";
 import { id, json, chainIdOf, type Operation } from "./shared.js";
 
 const terminal = new Set(["FINALIZED", "FAILED"]);
+// Operations an operator may settle faster for their own game. Budget moves,
+// issuance, registration and recovery resolutions always use the deployment rule.
+const GAME_PACED_KINDS = new Set([
+  "reward",
+  "pay",
+  "claimDelivery",
+  "fulfill",
+  "refund",
+]);
 // Keeps the relayer able to pay gas by moving RON from the admin wallet.
 export interface RelayerFunding {
   minWei: bigint;
@@ -222,8 +231,19 @@ export class Worker {
       this.busy = false;
     }
   }
+  gameConfirmations(kind: string, gameId: string | null): number | null {
+    if (!gameId || !GAME_PACED_KINDS.has(kind)) return null;
+    return (
+      this.store.get(
+        "SELECT confirmations FROM game_settlement WHERE game_id=?",
+        gameId,
+      )?.confirmations ?? null
+    );
+  }
   async process(op: Operation, a: EvmAdapter) {
-    const final = await a.finalBlock();
+    const final = await a.finalBlock(
+      this.gameConfirmations(op.kind, op.game_id),
+    );
     let attempt = this.store.get(
       "SELECT * FROM transaction_attempts WHERE operation_id=? AND status!='FAILED' ORDER BY rowid DESC LIMIT 1",
       op.id,
@@ -355,7 +375,9 @@ export class Worker {
       this.publishRegistration(op, true);
       this.markAllocation(op, true);
     }
-    const finalized = await a.finalBlock();
+    const finalized = await a.finalBlock(
+      this.gameConfirmations(op.kind, op.game_id),
+    );
     if (receipt.blockNumber > finalized.number) return;
     const canonical = await a.publicClient.getBlock({
       blockNumber: receipt.blockNumber,
@@ -681,11 +703,16 @@ export class Worker {
       });
     }
   }
-  async reconcilePayments(a: EvmAdapter, block: any) {
+  async reconcilePayments(a: EvmAdapter, deploymentBlock: any) {
+    const blocks = new Map<number | null, any>([[null, deploymentBlock]]);
     for (const p of this.store.all(
       "SELECT * FROM payments WHERE deployment_id=? AND status IN ('CREATED','PROCESSING','PAID','DELIVERY_CLAIMED')",
       a.deployment.id,
     )) {
+      const confirmations = this.gameConfirmations("pay", p.game_id);
+      if (!blocks.has(confirmations))
+        blocks.set(confirmations, await a.finalBlock(confirmations));
+      const block = blocks.get(confirmations);
       const onchain = await a.read("payments", [chainIdOf(p.id)], block.number);
       if (Number(onchain[5]) > 0)
         this.store.transaction(() => this.applyPayment(p.id, onchain));
