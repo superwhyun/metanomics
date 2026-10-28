@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
+import type { Deployment } from "./shared.js";
 
 // Environment values supplied by the caller take precedence over the file.
 export function runtimeEnvironment(
@@ -41,4 +42,26 @@ export function requireExternalDeployment(deployment: {
     throw new Error(
       "로컬 체인 설정으로 서버를 실행할 수 없습니다. CONFIG_PATH를 외부 테스트넷 설정으로 변경하세요.",
     );
+}
+
+/**
+ * FINALITY=finalized|depth (and CONFIRMATIONS for depth) override the stored
+ * deployment setting so an existing deployment can switch without a rewrite.
+ * Local deployments keep their own setting.
+ */
+export function applyFinalityOverride(
+  deployment: Deployment,
+  env: NodeJS.ProcessEnv = process.env,
+): Deployment {
+  const mode = env.FINALITY;
+  if (!mode || deployment.finality === "local") return deployment;
+  if (mode === "finalized") {
+    const { confirmations: _unused, ...rest } = deployment;
+    return { ...rest, finality: "finalized" };
+  }
+  if (mode === "depth") {
+    const confirmations = Number(env.CONFIRMATIONS);
+    return { ...deployment, finality: "depth", confirmations };
+  }
+  throw new Error(`FINALITY must be finalized or depth, got: ${mode}`);
 }

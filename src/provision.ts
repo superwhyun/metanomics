@@ -33,7 +33,8 @@ export async function deployContracts(
   keys: ProvisionKeys,
   settings: {
     id?: string;
-    finality?: "local" | "finalized";
+    finality?: "local" | "finalized" | "depth";
+    confirmations?: number;
     initialSupply?: string;
     cap?: string;
   } = {},
@@ -123,6 +124,9 @@ export async function deployContracts(
     relayer: relayer.address,
     fromBlock: receipt.blockNumber.toString(),
     finality: settings.finality ?? (chainId === 31337 ? "local" : "finalized"),
+    ...(settings.finality === "depth"
+      ? { confirmations: settings.confirmations }
+      : {}),
     authorizationWindowSeconds: claimWindow,
     claimWindowSeconds: claimWindow,
   };

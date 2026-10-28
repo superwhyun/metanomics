@@ -36,7 +36,8 @@ const deployment = await deployContracts(
   keys,
   {
     id: process.env.DEPLOYMENT_ID,
-    finality: "finalized",
+    finality: process.env.FINALITY === "depth" ? "depth" : "finalized",
+    confirmations: Number(process.env.CONFIRMATIONS),
     initialSupply: process.env.INITIAL_SUPPLY,
     cap: process.env.SUPPLY_CAP,
   },

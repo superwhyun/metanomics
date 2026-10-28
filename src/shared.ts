@@ -119,7 +119,9 @@ export type Deployment = {
   admin: Address;
   relayer: Address;
   fromBlock: string;
-  finality: "local" | "finalized";
+  // "depth": treat a block as final once `confirmations` blocks sit on top of it.
+  finality: "local" | "finalized" | "depth";
+  confirmations?: number;
   authorizationWindowSeconds?: number;
   claimWindowSeconds?: number;
   maxLogBlockRange?: number;

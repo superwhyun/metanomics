@@ -25,6 +25,7 @@ import {
 import { artifact } from "../src/contracts.js";
 import { DemoGame, NetworkClient } from "../src/game.js";
 import { EvmAdapter } from "../src/chain.js";
+import { applyFinalityOverride } from "../src/runtime.js";
 
 before(() => {
   compile();
@@ -1949,4 +1950,82 @@ test("a reverted issuance mint fails the issuance and never queues approval or r
   );
   assert.equal(issuance.status, "FAILED");
   assert.match(issuance.error, /^mint: /);
+});
+
+test("depth finality reports the block that many confirmations below the head and rejects bad settings", async (t) => {
+  const f = await fixture(t);
+  const depthAdapter = new EvmAdapter(
+    { ...f.deployment, finality: "depth", confirmations: 3 },
+    keys,
+  );
+  for (let i = 0; i < 6; i++)
+    await f.chain.client.request({ method: "evm_mine", params: [] } as any);
+  const head = await depthAdapter.latestBlock();
+  const settled = await depthAdapter.finalBlock();
+  assert.equal(settled.number, head.number - 3n);
+  assert.equal(depthAdapter.capabilities().finality, "depth");
+  // Near genesis the settled block never goes below block 0.
+  const young = new EvmAdapter(
+    { ...f.deployment, finality: "depth", confirmations: 1000 },
+    keys,
+  );
+  assert.equal((await young.finalBlock()).number, 0n);
+  for (const confirmations of [undefined, 0, 1.5, 1001])
+    assert.throws(
+      () =>
+        new EvmAdapter(
+          { ...f.deployment, finality: "depth", confirmations },
+          keys,
+        ),
+      /confirmations/,
+    );
+});
+
+test("FINALITY override switches an existing deployment to depth and leaves local ones alone", async (t) => {
+  const f = await fixture(t);
+  const remote = { ...f.deployment, finality: "finalized" as const };
+  assert.deepEqual(
+    applyFinalityOverride(remote, { FINALITY: "depth", CONFIRMATIONS: "5" }),
+    { ...remote, finality: "depth", confirmations: 5 },
+  );
+  assert.equal(applyFinalityOverride(remote, {}), remote);
+  assert.equal(
+    applyFinalityOverride(f.deployment, {
+      FINALITY: "depth",
+      CONFIRMATIONS: "5",
+    }),
+    f.deployment,
+  );
+  assert.throws(
+    () => applyFinalityOverride(remote, { FINALITY: "soon" }),
+    /FINALITY/,
+  );
+});
+
+test("with depth finality a reward settles after the confirmation blocks without waiting for L1 finality", async (t) => {
+  const f = await fixture(t);
+  await f.linkWallet();
+  await f.linkGames();
+  await f.allocate();
+  Object.assign(f.adapter.deployment, { finality: "depth", confirmations: 3 });
+  const rewardRef = id("depth");
+  const result = await f.call(
+    f.credentials["game-a"],
+    "POST",
+    "/v1/games/game-a/rewards",
+    { playerId: "player-001", assetId: ASSET, amount: "10.000000", rewardRef },
+  );
+  const status = () =>
+    f.store.get("SELECT status FROM operations WHERE id=?", result.operationId)
+      .status;
+  for (let i = 0; i < 5; i++) await f.worker.tick();
+  assert.equal(status(), "INCLUDED");
+  for (let i = 0; i < 3; i++)
+    await f.chain.client.request({ method: "evm_mine", params: [] } as any);
+  await f.drain();
+  assert.equal(status(), "FINALIZED");
+  assert.equal(
+    display(await f.adapter.getBalance(accounts.player.address)),
+    "10.000000",
+  );
 });

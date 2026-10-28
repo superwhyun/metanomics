@@ -1,5 +1,9 @@
 import { parseEther } from "viem";
-import { loadRuntime, requireExternalDeployment } from "./runtime.js";
+import {
+  applyFinalityOverride,
+  loadRuntime,
+  requireExternalDeployment,
+} from "./runtime.js";
 import { Store } from "./db.js";
 import { EvmAdapter } from "./chain.js";
 import { Worker } from "./worker.js";
@@ -14,7 +18,7 @@ const release = acquireWorkerLock(store.path);
 process.once("exit", release);
 const deployments: Deployment[] = store
   .all("SELECT config FROM deployments")
-  .map((row) => JSON.parse(row.config));
+  .map((row) => applyFinalityOverride(JSON.parse(row.config)));
 if (!deployments.length) throw new Error("등록된 외부 체인 배포가 없습니다.");
 for (const deployment of deployments) requireExternalDeployment(deployment);
 const adapters = new Map(

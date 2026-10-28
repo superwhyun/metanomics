@@ -28,6 +28,7 @@ import {
 const TOKEN_FUNCTIONS = new Set(["mint", "approve"]);
 // The relayer is an externally owned account, so a transfer costs the base fee.
 export const NATIVE_TRANSFER_GAS = 21_000n;
+export const MAX_CONFIRMATIONS = 1000;
 
 export interface ChainAdapter {
   deployment: Deployment;
@@ -123,6 +124,13 @@ export class EvmAdapter implements ChainAdapter {
       throw new Error("Admin key does not match deployment");
     if (deployment.finality === "local" && deployment.chainId !== 31337)
       throw new Error("Local finality is restricted to chain 31337");
+    if (deployment.finality === "depth") {
+      const depth = deployment.confirmations;
+      if (!Number.isInteger(depth) || depth! < 1 || depth! > MAX_CONFIRMATIONS)
+        throw new Error(
+          `Depth finality needs an integer confirmations value from 1 to ${MAX_CONFIRMATIONS}`,
+        );
+    }
   }
   capabilities() {
     return {
@@ -217,9 +225,21 @@ export class EvmAdapter implements ChainAdapter {
     try {
       if ((await this.publicClient.getChainId()) !== this.deployment.chainId)
         throw new Error("RPC chain ID mismatch");
-      const block = await this.publicClient.getBlock({
-        blockTag: this.deployment.finality === "local" ? "latest" : "finalized",
-      });
+      const { finality, confirmations } = this.deployment;
+      let block;
+      if (finality === "depth") {
+        // Soft finality: the block `confirmations` below the head. It follows
+        // the sequencer's chain, so it is not protected by L1 finality.
+        const head = await this.publicClient.getBlock({ blockTag: "latest" });
+        if (head.number === null) throw new Error("Latest block unavailable");
+        const depth = BigInt(confirmations!);
+        block = await this.publicClient.getBlock({
+          blockNumber: head.number > depth ? head.number - depth : 0n,
+        });
+      } else
+        block = await this.publicClient.getBlock({
+          blockTag: finality === "local" ? "latest" : "finalized",
+        });
       if (!block.hash || block.number === null)
         throw new Error("Finalized block unavailable");
       return block;
