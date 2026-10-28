@@ -772,7 +772,7 @@ async function refreshOperator() {
     views
       .map(({ game, actions, payments, rewards, credentials }) => {
         const liveCredentials = credentials.filter((c: any) => !c.revoked);
-        return `<article class="panel operator-game"><header class="operator-game-head"><div><span class="eyebrow">${esc(game.id)}</span><h2>${esc(game.name)}</h2></div>${pill(game.active ? "ACTIVE" : "INACTIVE")}</header><div class="mini-stats"><div><strong class="loading" data-budget-available="${esc(game.id)}">확인 중</strong><span>사용 가능 예산 CGC</span></div><div><strong class="loading" data-budget-reserved="${esc(game.id)}">확인 중</strong><span>지급·인출 대기</span></div><div><strong class="${payments.length ? "warn" : ""}">${payments.length}</strong><span>미완료 결제</span></div></div><div class="operator-game-body"><section class="op-block"><h3><span class="op-num">1</span>보상 예산</h3><p class="muted">이용자 보상은 이 예산에서 지급됩니다. 예치·인출은 승인 지갑으로 서명합니다.</p><form class="operator-form" data-budget-form="${esc(game.id)}"><label>금액 (CGC)<input name="amount" value="1.000000" required></label><label>작업<select name="kind"><option value="deposits">추가 예치</option><option value="withdrawals">예산 인출</option></select></label><button type="submit" class="primary">지갑으로 승인</button></form></section><section class="op-block"><h3><span class="op-num">2</span>게임 서버 연결</h3><p class="muted">API 주소·게임 ID·API 키를 한곳에서 확인하고 게임 서버에 설정합니다.</p><p>${liveCredentials.length ? `<span class="pill" data-credential-count="${esc(game.id)}">발급된 키 ${liveCredentials.length}개</span>` : `<span class="pill pending" data-credential-count="${esc(game.id)}">키 미발급</span>`}</p><button type="button" class="primary" data-goto="integration">연결 정보와 API 키 보기 →</button></section></div><details class="op-history"${payments.length ? " open" : ""}><summary>최근 내역 · 미완료 결제 ${payments.length}건</summary><div class="op-history-grid"><div><h3>미완료 결제</h3>${payments.map((p: any) => `<div class="activity-row"><div><strong>${esc(p.item.name)}</strong><small>${esc(p.paymentId)}</small></div>${pill(p.status)}</div>`).join("") || '<p class="muted">미완료 결제가 없습니다.</p>'}</div><div><h3>보상 지급 결과</h3>${
+        return `<article class="panel operator-game"><header class="operator-game-head"><div><span class="eyebrow">${esc(game.id)}</span><h2>${esc(game.name)}</h2></div>${pill(game.active ? "ACTIVE" : "INACTIVE")}</header><div class="mini-stats"><div><strong class="loading" data-budget-available="${esc(game.id)}">확인 중</strong><span>사용 가능 예산 CGC</span></div><div><strong class="loading" data-budget-reserved="${esc(game.id)}">확인 중</strong><span>지급·인출 대기</span></div><div><strong class="${payments.length ? "warn" : ""}">${payments.length}</strong><span>미완료 결제</span></div></div><div class="operator-game-body"><section class="op-block"><h3><span class="op-num">1</span>보상 예산</h3><p class="muted">이용자 보상은 이 예산에서 지급됩니다. 예치·인출은 승인 지갑으로 서명합니다.</p><form class="operator-form" data-budget-form="${esc(game.id)}"><label>금액 (CGC)<input name="amount" value="1.000000" required></label><label>작업<select name="kind"><option value="deposits">추가 예치</option><option value="withdrawals">예산 인출</option></select></label><button type="submit" class="primary">지갑으로 승인</button></form></section><section class="op-block"><h3><span class="op-num">2</span>게임 서버 연결</h3><p class="muted">API 주소·게임 ID·API 키를 한곳에서 확인하고 게임 서버에 설정합니다.</p><p>${liveCredentials.length ? `<span class="pill" data-credential-count="${esc(game.id)}">발급된 키 ${liveCredentials.length}개</span>` : `<span class="pill pending" data-credential-count="${esc(game.id)}">키 미발급</span>`}</p><button type="button" class="primary" data-goto="integration">연결 정보와 API 키 보기 →</button></section><section class="op-block"><h3><span class="op-num">3</span>정산 속도</h3><p class="muted">보상·결제를 몇 블록 확인한 뒤 완료로 볼지 정합니다. 1은 블록에 포함되는 즉시이며 빠르지만, 체인 재구성이 일어나면 이미 반영한 결과가 사라질 수 있습니다. 비우면 서버 기본값(L1 최종 확정 또는 서버 설정)을 따릅니다.</p><form class="operator-form" data-settlement-form="${esc(game.id)}"><label>확인 블록 수<input name="confirmations" type="number" min="1" max="1000" step="1" placeholder="서버 기본값" value="${game.confirmations ?? ""}"></label><button type="submit" class="primary">저장</button></form></section></div><details class="op-history"${payments.length ? " open" : ""}><summary>최근 내역 · 미완료 결제 ${payments.length}건</summary><div class="op-history-grid"><div><h3>미완료 결제</h3>${payments.map((p: any) => `<div class="activity-row"><div><strong>${esc(p.item.name)}</strong><small>${esc(p.paymentId)}</small></div>${pill(p.status)}</div>`).join("") || '<p class="muted">미완료 결제가 없습니다.</p>'}</div><div><h3>보상 지급 결과</h3>${
           rewards
             .slice(0, 5)
             .map(
@@ -829,6 +829,27 @@ async function refreshOperator() {
     },
     feedback: toast,
   });
+  document.querySelectorAll<HTMLFormElement>("[data-settlement-form]").forEach(
+    (form) =>
+      (form.onsubmit = (e) => {
+        e.preventDefault();
+        const raw = new FormData(form).get("confirmations")?.toString().trim();
+        const confirmations = raw ? Number(raw) : null;
+        void api(
+          `/games/${form.dataset.settlementForm}/settlement`,
+          { confirmations },
+          "PUT",
+        )
+          .then(() =>
+            toast(
+              confirmations
+                ? `${confirmations}블록 확인 후 완료로 처리합니다.`
+                : "서버 기본값을 따릅니다.",
+            ),
+          )
+          .catch((error) => toast(error.message, true));
+      }),
+  );
   document.querySelectorAll<HTMLFormElement>("[data-budget-form]").forEach(
     (form) =>
       (form.onsubmit = (e) => {

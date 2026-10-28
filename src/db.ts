@@ -56,6 +56,10 @@ export class Store {
       created_at: "INTEGER NOT NULL DEFAULT 0",
     });
     this.addColumns("login_wallets", { alias: "TEXT" });
+    // Operator-chosen settlement depth per game; no row follows the deployment.
+    this.run(
+      "CREATE TABLE IF NOT EXISTS game_settlement(game_id TEXT PRIMARY KEY REFERENCES games(id), confirmations INTEGER NOT NULL)",
+    );
     // Keys revoked before revocation meant deletion.
     this.run("DELETE FROM game_credentials WHERE revoked=1");
     this.seedDemoProfiles();

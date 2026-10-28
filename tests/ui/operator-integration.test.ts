@@ -308,3 +308,26 @@ test("an operator without approved games gets a registration path, not invented 
     "true",
   );
 });
+
+test("operators set and clear a game's settlement depth from the game panel", async (t) => {
+  const f = await fixture(t);
+  const form = f.page.locator('[data-settlement-form="game-nebula"]');
+  const input = form.locator('input[name="confirmations"]');
+  const saved = () =>
+    f.store.get(
+      "SELECT confirmations FROM game_settlement WHERE game_id='game-nebula'",
+    )?.confirmations ?? null;
+  await expect(input).toHaveValue("");
+  await input.fill("5");
+  await form.getByRole("button", { name: "저장" }).click();
+  await expect(f.page.locator("#toast")).toContainText("5블록");
+  assert.equal(saved(), 5);
+  assert.equal(
+    f.store.get("SELECT 1 FROM game_settlement WHERE game_id='game-harbor'"),
+    undefined,
+  );
+  await input.fill("");
+  await form.getByRole("button", { name: "저장" }).click();
+  await expect(f.page.locator("#toast")).toContainText("서버 기본값");
+  assert.equal(saved(), null);
+});

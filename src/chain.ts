@@ -29,6 +29,10 @@ const TOKEN_FUNCTIONS = new Set(["mint", "approve"]);
 // The relayer is an externally owned account, so a transfer costs the base fee.
 export const NATIVE_TRANSFER_GAS = 21_000n;
 export const MAX_CONFIRMATIONS = 1000;
+export const validConfirmations = (value: unknown): value is number =>
+  Number.isInteger(value) &&
+  (value as number) >= 1 &&
+  (value as number) <= MAX_CONFIRMATIONS;
 
 export interface ChainAdapter {
   deployment: Deployment;
@@ -39,7 +43,7 @@ export interface ChainAdapter {
     finality: string;
     maxLogBlockRange: number;
   };
-  finalBlock(): Promise<any>;
+  finalBlock(confirmations?: number | null): Promise<any>;
   latestBlock(): Promise<any>;
   getBalance(address: Address, blockNumber?: bigint): Promise<bigint>;
   getGameBudget(gameId: string, blockNumber?: bigint): Promise<bigint>;
@@ -124,13 +128,13 @@ export class EvmAdapter implements ChainAdapter {
       throw new Error("Admin key does not match deployment");
     if (deployment.finality === "local" && deployment.chainId !== 31337)
       throw new Error("Local finality is restricted to chain 31337");
-    if (deployment.finality === "depth") {
-      const depth = deployment.confirmations;
-      if (!Number.isInteger(depth) || depth! < 1 || depth! > MAX_CONFIRMATIONS)
-        throw new Error(
-          `Depth finality needs an integer confirmations value from 1 to ${MAX_CONFIRMATIONS}`,
-        );
-    }
+    if (
+      deployment.finality === "depth" &&
+      !validConfirmations(deployment.confirmations)
+    )
+      throw new Error(
+        `Depth finality needs an integer confirmations value from 1 to ${MAX_CONFIRMATIONS}`,
+      );
   }
   capabilities() {
     return {
@@ -221,21 +225,34 @@ export class EvmAdapter implements ChainAdapter {
       );
     }
   }
-  async finalBlock() {
+  /**
+   * The newest block treated as settled. `confirmations` (1..MAX) overrides the
+   * deployment setting for one caller, e.g. a game that chose a faster policy.
+   * One confirmation is the block that includes the transaction, so 1 settles
+   * as soon as a transaction is in the latest block. This is soft finality on
+   * the sequencer's chain, not L1 finality.
+   */
+  async finalBlock(confirmationsOverride?: number | null) {
     try {
       if ((await this.publicClient.getChainId()) !== this.deployment.chainId)
         throw new Error("RPC chain ID mismatch");
-      const { finality, confirmations } = this.deployment;
+      const { finality } = this.deployment;
+      const confirmations =
+        confirmationsOverride ??
+        (finality === "depth" ? this.deployment.confirmations : undefined);
       let block;
-      if (finality === "depth") {
-        // Soft finality: the block `confirmations` below the head. It follows
-        // the sequencer's chain, so it is not protected by L1 finality.
+      if (confirmations !== undefined) {
+        if (!validConfirmations(confirmations))
+          throw new Error("Invalid confirmations");
         const head = await this.publicClient.getBlock({ blockTag: "latest" });
         if (head.number === null) throw new Error("Latest block unavailable");
-        const depth = BigInt(confirmations!);
-        block = await this.publicClient.getBlock({
-          blockNumber: head.number > depth ? head.number - depth : 0n,
-        });
+        const below = BigInt(confirmations - 1);
+        block =
+          below === 0n
+            ? head
+            : await this.publicClient.getBlock({
+                blockNumber: head.number > below ? head.number - below : 0n,
+              });
       } else
         block = await this.publicClient.getBlock({
           blockTag: finality === "local" ? "latest" : "finalized",

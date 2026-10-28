@@ -15,7 +15,7 @@ import {
 } from "viem";
 import { Store } from "./db.js";
 import { Worker } from "./worker.js";
-import { NATIVE_TRANSFER_GAS } from "./chain.js";
+import { MAX_CONFIRMATIONS, NATIVE_TRANSFER_GAS } from "./chain.js";
 import {
   adminSetupCodeMatches,
   adminSetupPending,
@@ -951,7 +951,10 @@ export async function createApi(
       only(p, "operator");
       return {
         games: store.all(
-          catalogSql +
+          catalogSql.replace(
+            " FROM games g",
+            ",(SELECT confirmations FROM game_settlement WHERE game_id=g.id) AS confirmations FROM games g",
+          ) +
             " WHERE g.operator_id=? AND NOT EXISTS (SELECT 1 FROM game_registrations r WHERE r.game_id=g.id AND r.status!='APPROVED') ORDER BY g.rowid",
           p.id,
         ),
@@ -1246,6 +1249,49 @@ export async function createApi(
       });
     },
   );
+  // How quickly the operator's own rewards and payments count as settled.
+  // 1 settles once the transaction is in the latest block; null follows the
+  // deployment rule (L1 finality unless the deployment itself uses depth).
+  // Budget moves, issuance and recovery resolutions are not affected.
+  route(
+    "PUT",
+    "/games/:gameId/settlement",
+    "운영자의 게임 보상·결제 확정 블록 수 설정 (1은 블록에 포함되는 즉시, null은 배포 기본값)",
+    object({
+      confirmations: {
+        anyOf: [
+          { type: "integer", minimum: 1, maximum: MAX_CONFIRMATIONS },
+          { type: "null" },
+        ],
+      },
+    }),
+    (req, _reply, p) => {
+      only(p, "operator");
+      const g = game(p, req.params.gameId);
+      const confirmations = req.body.confirmations;
+      const previous =
+        store.get(
+          "SELECT confirmations FROM game_settlement WHERE game_id=?",
+          g.id,
+        )?.confirmations ?? null;
+      store.transaction(() => {
+        if (confirmations === null)
+          store.run("DELETE FROM game_settlement WHERE game_id=?", g.id);
+        else
+          store.run(
+            "INSERT INTO game_settlement VALUES(?,?) ON CONFLICT(game_id) DO UPDATE SET confirmations=excluded.confirmations",
+            g.id,
+            confirmations,
+          );
+        store.audit(p.id, "game.settlement", {
+          gameId: g.id,
+          previous,
+          confirmations,
+        });
+      });
+      return { gameId: g.id, confirmations };
+    },
+  );
   // Records a stop or resume in the contract. Separate from the portal switch:
   // a recorded stop makes the contract refuse new payments, rewards and
   // allocations even if the server misbehaves; once final it also switches the
@@ -1331,6 +1377,7 @@ export async function createApi(
           "game_registrations",
           "budget_snapshots",
           "allocation_schedules",
+          "game_settlement",
         ])
           store.run(`DELETE FROM ${table} WHERE game_id=?`, g.id);
         store.run("DELETE FROM games WHERE id=?", g.id);
