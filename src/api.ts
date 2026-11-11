@@ -35,6 +35,7 @@ import {
 } from "./wallet-auth.js";
 import { responseSchema } from "./schemas.js";
 import { playerBalance } from "./player-balance.js";
+import { WebhookDispatcher, webhookUrl } from "./webhooks.js";
 import {
   MONTHLY_LAST_DAY,
   firstRun,
@@ -122,6 +123,9 @@ export async function createApi(
     passwordLogin?: boolean;
     // How often recurring allocations are checked; 0 turns the timer off (tests).
     scheduleIntervalMs?: number;
+    // How often webhooks are delivered; 0 turns the timer off (tests).
+    webhookIntervalMs?: number;
+    webhookFetch?: typeof fetch;
   } = {},
 ) {
   const app = Fastify({
@@ -465,6 +469,7 @@ export async function createApi(
           path.endsWith("/rewards") ||
           path.endsWith("/payments") ||
           path.endsWith("/authorizations") ||
+          path.endsWith("/checkout-sessions") ||
           path.endsWith("/delivery-claims") ||
           path.endsWith("/fulfillments") ||
           path.endsWith("/refunds") ||
@@ -1378,6 +1383,8 @@ export async function createApi(
           "budget_snapshots",
           "allocation_schedules",
           "game_settlement",
+          "webhook_endpoints",
+          "checkout_sessions",
         ])
           store.run(`DELETE FROM ${table} WHERE game_id=?`, g.id);
         store.run("DELETE FROM games WHERE id=?", g.id);
@@ -1490,6 +1497,159 @@ export async function createApi(
         store.audit(p.id, "credential.revoke", req.params);
       });
       return { revoked: true };
+    },
+  );
+  // webhookIntervalMs 0 leaves delivery to the caller (tests drive it by hand).
+  const webhooks = new WebhookDispatcher(store, options.webhookFetch);
+  if (options.webhookIntervalMs !== 0) {
+    const timer = setInterval(() => {
+      webhooks
+        .tick()
+        .catch((e) => app.log.error({ err: e }, "webhook delivery failed"));
+    }, options.webhookIntervalMs ?? 1000);
+    app.addHook("onClose", async () => clearInterval(timer));
+  }
+  app.decorate("deliverWebhooks", (now?: number) => webhooks.tick(now));
+  const webhookView = (w: any) => ({
+    webhookId: w.id,
+    url: w.url,
+    label: w.label,
+    cursor: w.cursor,
+    pendingEvents: store.get(
+      "SELECT count(*) AS n FROM event_outbox WHERE game_id=? AND seq>?",
+      w.game_id,
+      w.cursor,
+    ).n,
+    failures: w.failures,
+    nextAttemptAt: w.next_attempt_at || null,
+    lastStatus: w.last_status,
+    lastError: w.last_error,
+    lastDeliveredAt: w.last_delivered_at,
+    createdAt: w.created_at,
+  });
+  const webhookOf = (p: Principal, gameId: string, webhookId: string) => {
+    game(p, gameId);
+    requireThat(p.role !== "game", 403, "OPERATOR_REQUIRED");
+    const w = store.get(
+      "SELECT * FROM webhook_endpoints WHERE id=? AND game_id=?",
+      webhookId,
+      gameId,
+    );
+    requireThat(w, 404, "WEBHOOK_NOT_FOUND");
+    return w;
+  };
+  route(
+    "POST",
+    "/games/:gameId/webhooks",
+    "운영자 웹훅 주소 등록 (서명 비밀값은 한 번만 표시)",
+    object(
+      {
+        url: { type: "string", minLength: 1, maxLength: 2048 },
+        label: { type: "string", minLength: 1, maxLength: 60 },
+        fromCursor: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Deliver events after this cursor. Defaults to the latest event, so history is not replayed.",
+        },
+      },
+      ["url", "label"],
+    ),
+    (req, _reply, p) => {
+      const g = game(p, req.params.gameId);
+      requireThat(p.role !== "game", 403, "OPERATOR_REQUIRED");
+      const label = req.body.label.trim();
+      requireThat(label, 422, "LABEL_REQUIRED");
+      const url = webhookUrl(req.body.url.trim());
+      requireThat(
+        store.get(
+          "SELECT count(*) AS n FROM webhook_endpoints WHERE game_id=?",
+          g.id,
+        ).n < 5,
+        409,
+        "WEBHOOK_LIMIT",
+        "게임당 웹훅은 5개까지 등록할 수 있습니다.",
+      );
+      const webhookId = id("webhook"),
+        secret = `whsec_${opaque()}`;
+      store.transaction(() => {
+        const latest =
+          store.get(
+            "SELECT MAX(seq) AS seq FROM event_outbox WHERE game_id=?",
+            g.id,
+          ).seq ?? 0;
+        store.run(
+          "INSERT INTO webhook_endpoints(id,game_id,url,label,secret,cursor,created_at) VALUES(?,?,?,?,?,?,?)",
+          webhookId,
+          g.id,
+          url,
+          label,
+          secret,
+          Math.min(req.body.fromCursor ?? latest, latest),
+          Date.now(),
+        );
+        store.audit(p.id, "webhook.create", { gameId: g.id, webhookId, url });
+      });
+      return {
+        ...webhookView(
+          store.get("SELECT * FROM webhook_endpoints WHERE id=?", webhookId),
+        ),
+        secret,
+      };
+    },
+  );
+  route(
+    "GET",
+    "/games/:gameId/webhooks",
+    "운영자 웹훅 목록과 전송 상태 (비밀값 제외)",
+    null,
+    (req, _reply, p) => {
+      game(p, req.params.gameId);
+      requireThat(p.role !== "game", 403, "OPERATOR_REQUIRED");
+      return {
+        webhooks: store
+          .all(
+            "SELECT * FROM webhook_endpoints WHERE game_id=? ORDER BY rowid DESC",
+            req.params.gameId,
+          )
+          .map(webhookView),
+      };
+    },
+  );
+  route(
+    "DELETE",
+    "/games/:gameId/webhooks/:webhookId",
+    "웹훅 삭제",
+    null,
+    (req, _reply, p) => {
+      const w = webhookOf(p, req.params.gameId, req.params.webhookId);
+      store.transaction(() => {
+        store.run("DELETE FROM webhook_endpoints WHERE id=?", w.id);
+        store.audit(p.id, "webhook.delete", req.params);
+      });
+      return { deleted: true };
+    },
+  );
+  route(
+    "POST",
+    "/games/:gameId/webhooks/:webhookId/tests",
+    "웹훅 연결 확인 (webhook.test 이벤트 1회 전송, 이벤트 기록·커서에 영향 없음)",
+    object({}),
+    async (req, _reply, p) => {
+      const w = webhookOf(p, req.params.gameId, req.params.webhookId);
+      const result = await webhooks.post(w, {
+        eventId: id("test"),
+        type: "webhook.test",
+        gameId: w.game_id,
+        resourceId: w.id,
+        payload: {},
+        cursor: w.cursor,
+      });
+      return {
+        delivered: result.ok,
+        status: result.status,
+        error: result.error,
+      };
     },
   );
   route(
@@ -2323,6 +2483,88 @@ export async function createApi(
       };
     },
   );
+  // Shared by the game server relay and the hosted checkout page. The signature
+  // must come from the order's payer, so whoever submits it cannot redirect funds.
+  const authorizePayment = async (
+    pay: any,
+    body: any,
+    record: (fn: () => any) => any,
+  ) => {
+    // The portal switch replaces the contract flag, so a game switched off
+    // accepts no new payment authorization. Resubmitting an accepted one is fine.
+    if (
+      !store.get(
+        "SELECT 1 FROM operations WHERE kind='pay' AND resource_id=?",
+        pay.id,
+      )
+    )
+      requireThat(
+        store.get("SELECT active FROM games WHERE id=?", pay.game_id)?.active,
+        409,
+        "GAME_INACTIVE",
+        "운영이 중지된 게임의 결제는 승인할 수 없습니다.",
+      );
+    const a = worker.adapter(pay.deployment_id);
+    const data = JSON.parse(pay.payload);
+    await a.finalBlock();
+    const chainTime = await a.chainTime();
+    requireThat(
+      await a.verifyAuthorization(
+        data.authorization,
+        body.signature,
+        data.payer,
+      ),
+      422,
+      "INVALID_SIGNATURE",
+    );
+    if (body.permitSignature)
+      requireThat(
+        body.permitDeadline === pay.expires_at,
+        422,
+        "INVALID_PERMIT_DEADLINE",
+      );
+    return record(() => {
+      const existing = store.get(
+        "SELECT * FROM operations WHERE kind=? AND resource_id=?",
+        "pay",
+        pay.id,
+      );
+      if (existing && existing.status !== "FAILED")
+        return result(pay.id, existing.id, { paymentId: pay.id });
+      requireThat(
+        pay.status === "CREATED" && chainTime <= pay.expires_at,
+        409,
+        "PAYMENT_NOT_PAYABLE",
+      );
+      if (existing) {
+        store.run(
+          "UPDATE operations SET status='QUEUED',error=NULL,payload=? WHERE id=?",
+          json([
+            data.authorization.message,
+            body.signature,
+            a.permit(body.permitSignature, body.permitDeadline),
+          ]),
+          existing.id,
+        );
+        store.run("UPDATE payments SET status='PROCESSING' WHERE id=?", pay.id);
+        return result(pay.id, existing.id, { paymentId: pay.id });
+      }
+      const op = worker.queue(
+        "pay",
+        pay.id,
+        pay.game_id,
+        pay.deployment_id,
+        "relayer",
+        [
+          data.authorization.message,
+          body.signature,
+          a.permit(body.permitSignature, body.permitDeadline),
+        ],
+      );
+      store.run("UPDATE payments SET status='PROCESSING' WHERE id=?", pay.id);
+      return result(pay.id, op, { paymentId: pay.id });
+    });
+  };
   route(
     "POST",
     "/payments/:paymentId/authorizations",
@@ -2335,85 +2577,168 @@ export async function createApi(
         only(p, "player");
         requireThat(ownsPayment(p, pay), 403, "NOT_PAYER");
       }
-      // The portal switch replaces the contract flag, so a game switched off
-      // accepts no new payment authorization. Resubmitting an accepted one is fine.
-      if (
-        !store.get(
-          "SELECT 1 FROM operations WHERE kind='pay' AND resource_id=?",
-          pay.id,
-        )
-      )
-        requireThat(
-          store.get("SELECT active FROM games WHERE id=?", pay.game_id)?.active,
-          409,
-          "GAME_INACTIVE",
-          "운영이 중지된 게임의 결제는 승인할 수 없습니다.",
-        );
-      const a = worker.adapter(pay.deployment_id);
-      const data = JSON.parse(pay.payload);
-      await a.finalBlock();
-      const chainTime = await a.chainTime();
-      requireThat(
-        await a.verifyAuthorization(
-          data.authorization,
-          req.body.signature,
-          data.payer,
-        ),
-        422,
-        "INVALID_SIGNATURE",
+      const response = await authorizePayment(pay, req.body, (fn) =>
+        idem(p, req, fn),
       );
-      if (req.body.permitSignature)
-        requireThat(
-          req.body.permitDeadline === pay.expires_at,
-          422,
-          "INVALID_PERMIT_DEADLINE",
-        );
-      const response = idem(p, req, () => {
-        const existing = store.get(
-          "SELECT * FROM operations WHERE kind=? AND resource_id=?",
-          "pay",
-          pay.id,
-        );
-        if (existing && existing.status !== "FAILED")
-          return result(pay.id, existing.id, { paymentId: pay.id });
-        requireThat(
-          pay.status === "CREATED" && chainTime <= pay.expires_at,
-          409,
-          "PAYMENT_NOT_PAYABLE",
-        );
-        if (existing) {
-          store.run(
-            "UPDATE operations SET status='QUEUED',error=NULL,payload=? WHERE id=?",
-            json([
-              data.authorization.message,
-              req.body.signature,
-              a.permit(req.body.permitSignature, req.body.permitDeadline),
-            ]),
-            existing.id,
-          );
-          store.run(
-            "UPDATE payments SET status='PROCESSING' WHERE id=?",
-            pay.id,
-          );
-          return result(pay.id, existing.id, { paymentId: pay.id });
-        }
-        const op = worker.queue(
-          "pay",
-          pay.id,
-          pay.game_id,
-          pay.deployment_id,
-          "relayer",
-          [
-            data.authorization.message,
-            req.body.signature,
-            a.permit(req.body.permitSignature, req.body.permitDeadline),
-          ],
-        );
-        store.run("UPDATE payments SET status='PROCESSING' WHERE id=?", pay.id);
-        return result(pay.id, op, { paymentId: pay.id });
-      });
       return reply.code(202).send(response);
     },
+  );
+  // Hosted checkout: the game server opens a payment page on the portal origin
+  // instead of building its own wallet-signing screen. The link token only lets
+  // its holder view one payment and relay the payer's own signature.
+  const redirectUrl = (value: string) => {
+    let url: URL | undefined;
+    try {
+      url = new URL(value);
+    } catch {}
+    requireThat(
+      url &&
+        ["https:", "http:"].includes(url.protocol) &&
+        !url.username &&
+        !url.password,
+      422,
+      "INVALID_RETURN_URL",
+      "돌아갈 주소는 http 또는 https 웹 주소여야 합니다.",
+    );
+    return url!.href;
+  };
+  const checkoutSession = (token: string) => {
+    const session = store.get(
+      "SELECT * FROM checkout_sessions WHERE token_hash=?",
+      sha(token),
+    );
+    requireThat(
+      session,
+      404,
+      "CHECKOUT_NOT_FOUND",
+      "결제 링크가 올바르지 않습니다. 게임에서 다시 결제를 시작하세요.",
+    );
+    return session;
+  };
+  route(
+    "POST",
+    "/payments/:paymentId/checkout-sessions",
+    "게임 서버가 이용자에게 보낼 결제창 링크 발급",
+    object(
+      {
+        returnUrl: {
+          type: "string",
+          minLength: 1,
+          maxLength: 2048,
+          description:
+            "Where the payer returns after submitting. paymentId, orderId and checkout=submitted are appended.",
+        },
+        cancelUrl: {
+          type: "string",
+          minLength: 1,
+          maxLength: 2048,
+          description:
+            "Where the payer returns on cancel (checkout=cancelled is appended). Defaults to returnUrl.",
+        },
+      },
+      ["returnUrl"],
+    ),
+    async (req, _reply, p) => {
+      const pay = paymentAccess(p, req.params.paymentId);
+      game(p, pay.game_id, "payments", true);
+      const returnUrl = redirectUrl(req.body.returnUrl);
+      const cancelUrl = req.body.cancelUrl
+        ? redirectUrl(req.body.cancelUrl)
+        : null;
+      const chainTime = await worker.adapter(pay.deployment_id).chainTime();
+      return idem(p, req, () => {
+        const current = store.get(
+          "SELECT status,expires_at FROM payments WHERE id=?",
+          pay.id,
+        );
+        requireThat(
+          current.status === "CREATED" && chainTime <= current.expires_at,
+          409,
+          "PAYMENT_NOT_PAYABLE",
+          "결제 대기 중인 주문만 결제창을 열 수 있습니다.",
+        );
+        const token = opaque(),
+          checkoutSessionId = id("checkout");
+        store.run(
+          "INSERT INTO checkout_sessions VALUES(?,?,?,?,?,?,?)",
+          checkoutSessionId,
+          sha(token),
+          pay.id,
+          pay.game_id,
+          returnUrl,
+          cancelUrl,
+          Date.now(),
+        );
+        return {
+          checkoutSessionId,
+          paymentId: pay.id,
+          // The token travels in the fragment, so it never reaches server logs or Referer.
+          url: `${origin}/checkout.html#${token}`,
+          expiresAt: current.expires_at,
+        };
+      });
+    },
+  );
+  route(
+    "GET",
+    "/checkout/:token",
+    "결제창: 결제 내용과 서명 요청 조회",
+    null,
+    async (req) => {
+      const session = checkoutSession(req.params.token);
+      const pay = store.get(
+        "SELECT * FROM payments WHERE id=?",
+        session.payment_id,
+      );
+      const a = worker.adapter(pay.deployment_id);
+      const view: any = paymentView(pay);
+      delete view.playerId;
+      delete view.metadata;
+      if (pay.status === "CREATED")
+        view.permit = await a.preparePermit(
+          view.payer,
+          amount(view.amount),
+          pay.expires_at,
+        );
+      return {
+        checkoutSessionId: session.id,
+        gameName: store.get("SELECT name FROM games WHERE id=?", pay.game_id)
+          ?.name,
+        returnUrl: session.return_url,
+        cancelUrl: session.cancel_url ?? session.return_url,
+        network: {
+          id: a.deployment.id,
+          chainId: a.deployment.chainId,
+          rpcUrl: a.deployment.rpcUrl,
+          finality: a.deployment.finality,
+        },
+        payment: view,
+      };
+    },
+    true,
+  );
+  route(
+    "POST",
+    "/checkout/:token/authorizations",
+    "결제창: 이용자 결제 서명 제출",
+    authorizationSchema,
+    async (req, reply) => {
+      const session = checkoutSession(req.params.token);
+      const pay = store.get(
+        "SELECT * FROM payments WHERE id=?",
+        session.payment_id,
+      );
+      const response = await authorizePayment(pay, req.body, (fn) =>
+        store.idem(
+          `checkout:${session.id}:authorizations`,
+          key(req),
+          req.body,
+          fn,
+        ),
+      );
+      return reply.code(202).send(response);
+    },
+    true,
   );
   for (const [path, kind, expected] of [
     ["delivery-claims", "claimDelivery", "PAID"],

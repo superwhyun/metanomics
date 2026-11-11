@@ -79,7 +79,7 @@ async function main() {
   compile();
   if (closing) return;
   await build({
-    entryPoints: ["web/app.ts", "web/wallet-check.ts"],
+    entryPoints: ["web/app.ts", "web/wallet-check.ts", "web/checkout.ts"],
     bundle: true,
     format: "esm",
     outdir: "public",

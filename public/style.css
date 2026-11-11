@@ -1975,3 +1975,32 @@ button.small {
 .account-choice-row summary {
   cursor: pointer;
 }
+
+/* Hosted checkout */
+.checkout {
+  max-width: 560px;
+  margin-inline: auto;
+}
+.checkout-summary {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+.checkout-summary div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.checkout-summary dt {
+  color: var(--muted);
+}
+.checkout-summary dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+#checkout-status.error {
+  color: var(--rose);
+}

@@ -752,12 +752,14 @@ async function refreshOperator() {
   budgetsRequest.catch(() => {});
   const views = await Promise.all(
     games.map(async (game: any) => {
-      const [actions, payments, rewards, credentials] = await Promise.all([
-        api(`/games/${game.id}/budget-actions`),
-        api(`/games/${game.id}/payments`),
-        api(`/games/${game.id}/rewards`),
-        api(`/games/${game.id}/credentials`),
-      ]);
+      const [actions, payments, rewards, credentials, webhooks] =
+        await Promise.all([
+          api(`/games/${game.id}/budget-actions`),
+          api(`/games/${game.id}/payments`),
+          api(`/games/${game.id}/rewards`),
+          api(`/games/${game.id}/credentials`),
+          api(`/games/${game.id}/webhooks`),
+        ]);
       return {
         game,
         budget: undefined as any,
@@ -765,6 +767,7 @@ async function refreshOperator() {
         payments: payments.payments,
         rewards: rewards.rewards,
         credentials: credentials.credentials,
+        webhooks: webhooks.webhooks,
       };
     }),
   );
@@ -827,6 +830,13 @@ async function refreshOperator() {
       );
       toast("API 키를 폐기했습니다.");
       await refreshOperator();
+    },
+    createWebhook: (gameId, url, label) =>
+      api(`/games/${gameId}/webhooks`, { url, label }),
+    testWebhook: (gameId, webhookId) =>
+      api(`/games/${gameId}/webhooks/${webhookId}/tests`, {}),
+    deleteWebhook: async (gameId, webhookId) => {
+      await api(`/games/${gameId}/webhooks/${webhookId}`, undefined, "DELETE");
     },
     feedback: toast,
   });

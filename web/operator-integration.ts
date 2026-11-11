@@ -4,9 +4,21 @@ export type GameCredential = {
   scopes: string[];
   createdAt?: number;
 };
+export type GameWebhook = {
+  webhookId: string;
+  url: string;
+  label: string;
+  pendingEvents: number;
+  failures: number;
+  lastStatus: number | null;
+  lastError: string | null;
+  lastDeliveredAt: number | null;
+};
+type CreatedWebhook = GameWebhook & { secret: string };
 type IntegrationGame = {
   game: { id: string; name: string };
   credentials: GameCredential[];
+  webhooks?: GameWebhook[];
 };
 type IssuedCredential = {
   credentialId: string;
@@ -20,6 +32,20 @@ type Options = {
   guideUrl: string;
   issue(gameId: string, label: string): Promise<IssuedCredential>;
   revoke(gameId: string, credentialId: string): Promise<void>;
+  createWebhook(
+    gameId: string,
+    url: string,
+    label: string,
+  ): Promise<CreatedWebhook>;
+  testWebhook(
+    gameId: string,
+    webhookId: string,
+  ): Promise<{
+    delivered: boolean;
+    status: number | null;
+    error: string | null;
+  }>;
+  deleteWebhook(gameId: string, webhookId: string): Promise<void>;
   feedback(message: string, error?: boolean): void;
 };
 
@@ -112,7 +138,178 @@ export function renderOperatorIntegration(
     container.append(empty);
     return;
   }
-  for (const { game, credentials } of games) {
+  // Webhooks are optional: polling stays the recovery path, so a game can add
+  // them at any time without changing how it completes payments.
+  const renderWebhooks = (gameId: string, initial: GameWebhook[]) => {
+    const section = node("section", undefined, "connection-key");
+    section.dataset.webhooks = gameId;
+    section.append(
+      node("h3", "웹훅 (선택)"),
+      node(
+        "p",
+        "결제·보상 상태가 바뀌면 게임 서버의 주소로 바로 알립니다. 웹훅을 쓰더라도 재시작 복구용 주기 조회는 유지하세요.",
+        "muted",
+      ),
+    );
+    const created = node("div", undefined, "connection-issued");
+    const list = node("div", undefined, "connection-credentials");
+    const records = [...initial];
+    const describe = (hook: GameWebhook) =>
+      hook.failures
+        ? `전송 실패 ${hook.failures}회 · ${hook.lastError ?? "응답 없음"} · 대기 이벤트 ${hook.pendingEvents}개 (자동 재시도)`
+        : hook.lastDeliveredAt
+          ? `정상 · 마지막 전송 ${new Date(hook.lastDeliveredAt).toLocaleString("ko-KR")}${hook.pendingEvents ? ` · 대기 ${hook.pendingEvents}개` : ""}`
+          : "아직 전송한 이벤트가 없습니다.";
+    const renderList = () => {
+      list.replaceChildren();
+      if (!records.length) {
+        list.append(node("p", "등록된 웹훅이 없습니다.", "muted"));
+        return;
+      }
+      for (const hook of records) {
+        const row = node("div", undefined, "activity-row");
+        row.dataset.webhook = hook.webhookId;
+        const description = node("div");
+        description.append(
+          node("strong", hook.label),
+          node("small", hook.url),
+          node("small", describe(hook), hook.failures ? "warn" : undefined),
+        );
+        const actions = node("div", undefined, "actions");
+        const test = node("button", "테스트 전송", "quiet small");
+        test.type = "button";
+        test.addEventListener("click", async () => {
+          test.disabled = true;
+          try {
+            const result = await options.testWebhook(gameId, hook.webhookId);
+            options.feedback(
+              result.delivered
+                ? `테스트 이벤트 전송 성공 (HTTP ${result.status})`
+                : `테스트 이벤트 전송 실패: ${result.error ?? "응답 없음"}`,
+              !result.delivered,
+            );
+          } catch (error) {
+            options.feedback(
+              error instanceof Error ? error.message : "전송하지 못했습니다.",
+              true,
+            );
+          } finally {
+            test.disabled = false;
+          }
+        });
+        const remove = node("button", "삭제", "quiet small");
+        remove.type = "button";
+        let armed = false;
+        remove.addEventListener("click", async () => {
+          if (!armed) {
+            armed = true;
+            remove.textContent = "정말 삭제";
+            remove.classList.add("danger");
+            return;
+          }
+          remove.disabled = true;
+          try {
+            await options.deleteWebhook(gameId, hook.webhookId);
+            records.splice(records.indexOf(hook), 1);
+            renderList();
+            options.feedback("웹훅을 삭제했습니다.");
+          } catch (error) {
+            options.feedback(
+              error instanceof Error ? error.message : "삭제하지 못했습니다.",
+              true,
+            );
+            remove.disabled = false;
+          }
+        });
+        actions.append(test, remove);
+        row.append(description, actions);
+        list.append(row);
+      }
+    };
+    const add = node("button", "웹훅 등록", "quiet");
+    add.type = "button";
+    add.addEventListener("click", () => {
+      created.replaceChildren();
+      const form = node("form", undefined, "credential-form");
+      const urlLabel = node("label", "받을 주소");
+      const url = node("input");
+      url.name = "url";
+      url.type = "url";
+      url.required = true;
+      url.placeholder = "https://game.example.com/metanomic/webhook";
+      urlLabel.append(url);
+      const nameLabel = node("label", "웹훅 이름");
+      const name = node("input");
+      name.name = "label";
+      name.required = true;
+      name.maxLength = 60;
+      name.value = "게임 서버";
+      nameLabel.append(name);
+      const submit = node("button", "등록", "primary");
+      submit.type = "submit";
+      const cancel = node("button", "취소", "quiet");
+      cancel.type = "button";
+      cancel.addEventListener("click", () => created.replaceChildren());
+      form.append(urlLabel, nameLabel, submit, cancel);
+      created.append(form);
+      url.focus();
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        submit.disabled = cancel.disabled = true;
+        try {
+          const hook = await options.createWebhook(
+            gameId,
+            url.value.trim(),
+            name.value.trim(),
+          );
+          const { secret, ...record } = hook;
+          records.unshift(record);
+          renderList();
+          created.replaceChildren(
+            node("h4", `${hook.label} · 등록 완료`),
+            node(
+              "p",
+              "서명 비밀값은 지금 한 번만 표시됩니다. 게임 서버의 METANOMIC_WEBHOOK_SECRET에 보관하고, 요청마다 Metanomic-Signature 헤더를 검증하세요.",
+              "muted",
+            ),
+          );
+          const value = node("input");
+          value.type = "text";
+          value.readOnly = true;
+          value.value = secret;
+          value.setAttribute("aria-label", "웹훅 서명 비밀값");
+          value.autocomplete = "off";
+          value.spellcheck = false;
+          const actions = node("div", undefined, "actions");
+          const hide = node("button", "보관 완료 · 화면에서 숨기기", "quiet");
+          hide.type = "button";
+          hide.addEventListener("click", () => created.replaceChildren());
+          actions.append(
+            copyButton(secret, "서명 비밀값"),
+            copyButton(
+              `METANOMIC_WEBHOOK_SECRET=${JSON.stringify(secret)}`,
+              "환경 변수",
+              "환경 변수 복사",
+            ),
+            hide,
+          );
+          created.append(value, actions);
+        } catch (error) {
+          options.feedback(
+            error instanceof Error
+              ? error.message
+              : "웹훅을 등록하지 못했습니다.",
+            true,
+          );
+          submit.disabled = cancel.disabled = false;
+        }
+      });
+    });
+    renderList();
+    section.append(add, created, list);
+    return section;
+  };
+  for (const { game, credentials, webhooks } of games) {
     const card = node("article", undefined, "panel integration-card");
     card.dataset.integrationGame = game.id;
     card.setAttribute("aria-label", game.name);
@@ -342,8 +539,10 @@ export function renderOperatorIntegration(
     });
     renderRecords();
     keySection.append(issueButton, issued, list);
+    const hookSection = renderWebhooks(game.id, webhooks ?? []);
     card.append(
       keySection,
+      hookSection,
       preview,
       node(
         "p",

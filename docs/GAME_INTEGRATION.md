@@ -29,6 +29,14 @@ npm run dev
 
 **구현 순서**: ① 게임 지갑 로그인(§4) → ② 보상 지급(§5) → ③ 주문·결제(§6) → ④ 아이템 지급·완료 통지(§7) → ⑤ 폴링·재시작 복구(§8). 보상만 쓰는 게임은 ①②⑤만 구현한다.
 
+**연동을 줄이는 세 가지 도구** (모두 선택 사항이며 아래 HTTP API와 같은 규칙을 따른다)
+
+| 도구          | 줄어드는 작업                                 | 참고                         |
+| ------------- | --------------------------------------------- | ---------------------------- |
+| 게임 서버 SDK | HTTP 클라이언트·요청 키·재시도·웹훅 서명 검증 | §3, [sdk/](../sdk/README.md) |
+| 호스팅 결제창 | 게임마다 만드는 결제 서명 화면 (§6의 2~4단계) | §6 결제창으로 승인 받기      |
+| 웹훅          | 1초 간격 이벤트 폴링 (복구용 순회는 유지)     | §8 웹훅                      |
+
 **게임 서버가 호출하는 API** (모두 `Authorization: Bearer <게임 API 키>`, 변경 요청은 `Idempotency-Key` 필수)
 
 | 메서드·경로                                    | 필요한 범위 | 용도                                    |
@@ -39,6 +47,7 @@ npm run dev
 | `POST /games/{gameId}/rewards`                 | `rewards`   | 보상 지급 요청 (202)                    |
 | `GET /games/{gameId}/rewards?rewardRef=`       | `rewards`   | 보상 조회·응답 유실 복구                |
 | `POST /games/{gameId}/payments`                | `payments`  | 주문(결제) 생성                         |
+| `POST /payments/{paymentId}/checkout-sessions` | `payments`  | 호스팅 결제창 링크 발급                 |
 | `GET /games/{gameId}/payments?status=&cursor=` | `payments`  | 결제 목록·재시작 복구                   |
 | `POST /payments/{paymentId}/delivery-claims`   | `payments`  | 아이템 지급 시작 (`PAID`일 때)          |
 | `POST /payments/{paymentId}/fulfillments`      | `payments`  | 아이템 지급 완료 통지                   |
@@ -63,12 +72,14 @@ npm run dev
 | [API 구현](../src/api.ts)    | 인증 주체·권한·상태 검사와 실제 응답                   |
 | [예제 게임](../src/game.ts)  | 서버 API 클라이언트, 주문 저장, 아이템 지급, 복구 작업 |
 | [공통 화면](../web/app.ts)   | 지갑 연결, 결제 내용과 토큰 사용 승인 서명             |
+| [SDK](../sdk/README.md)      | 게임 서버용 API 클라이언트·웹훅 서명 검증              |
+| [결제창](../web/checkout.ts) | 호스팅 결제창의 지갑 연결·서명·복귀                    |
 | [설계·복구 명세](DESIGN.md)  | 계약 회계, 상태·만료·재시도 규칙                       |
 | [검증 기록](VERIFICATION.md) | 로컬·외부 테스트넷 검증의 구분                         |
 
 게임은 자체 로그인·랭킹·상품 가격·아이템 인벤토리를 관리한다. Metanomic은 공통 이용자·지갑 연결, 게임 예산, 코인 보상·결제·정산을 관리한다. 게임 서버는 공통 HTTP API를 사용하며 RPC나 계약 ABI를 직접 호출할 필요가 없다.
 
-현재 제공하는 것은 API, 선택적으로 사용하는 잔액·내역 포털, 통합 테스트용 예제 게임(`src/game.ts`)이다. 운영자가 지갑으로 신청·승인받아 게임과 예산을 등록한다. 일반 이용자는 각 게임에 지갑으로 로그인하면 된다. 포털 가입·게임별 연결 코드 없이 보상을 받고 게임 안에서 결제할 수 있다. npm SDK, 범용 로그인 리다이렉트, 호스팅 결제창 URL, 웹훅은 아직 없다. 각 게임이 자체 지갑 로그인과 결제 서명 화면을 구현한다.
+현재 제공하는 것은 API, 선택적으로 사용하는 잔액·내역 포털, 통합 테스트용 예제 게임(`src/game.ts`)이다. 운영자가 지갑으로 신청·승인받아 게임과 예산을 등록한다. 일반 이용자는 각 게임에 지갑으로 로그인하면 된다. 포털 가입·게임별 연결 코드 없이 보상을 받고 게임 안에서 결제할 수 있다. 게임 서버 SDK(`sdk/`), 호스팅 결제창, 서명된 웹훅을 제공한다. 범용 로그인 리다이렉트는 아직 없으므로 각 게임이 자체 지갑 로그인을 구현한다. 결제 서명 화면은 호스팅 결제창을 쓰거나 게임이 직접 구현한다. SDK는 아직 npm 레지스트리에 공개하지 않았으므로 저장소의 `sdk/`를 빌드해 사용한다.
 
 ## 2. 선행 설정과 인증 주체
 
@@ -125,9 +136,42 @@ Challenge 접수 유효기간은 5분, 세션은 메시지 발급 후 최대 8�
 
 현재 API는 설정된 공통 포털 origin 이외의 브라우저 변경 요청을 `ORIGIN_DENIED`로 거절하고 범용 CORS를 제공하지 않는다. 공통 포털은 iframe 포함도 허용하지 않는다. 외부 게임 페이지에서 API로 직접 fetch하는 구성은 현재 그대로 사용할 수 없다. 서버 간 호출은 이 브라우저 origin 제약과 구분된다.
 
-외부 게임은 자신의 origin에서 지갑 로그인과 결제 서명을 처리한다. 게임 자체 세션으로 인증한 이용자의 주소·주문을 확인하고 Metanomic API 호출은 서버 API 키로 중계한다. 포털 세션 토큰이나 게임 API 키를 URL·브라우저에 전달하지 않는다. 별도 공통 로그인 리다이렉트나 연결 코드 입력 화면은 필요하지 않다.
+외부 게임은 자신의 origin에서 지갑 로그인을 처리한다. 결제 서명은 Metanomic 결제창(§6)으로 보내거나 게임 화면에서 직접 받는다. 게임 자체 세션으로 인증한 이용자의 주소·주문을 확인하고 Metanomic API 호출은 서버 API 키로 중계한다. 포털 세션 토큰이나 게임 API 키를 URL·브라우저에 전달하지 않는다. 별도 공통 로그인 리다이렉트나 연결 코드 입력 화면은 필요하지 않다.
 
 ## 3. 게임 서버 HTTP 클라이언트
+
+### SDK 사용 (권장)
+
+Node.js 22 게임 서버는 저장소의 `sdk/`(`@metanomic/game-sdk`, 의존성 없음)를 사용할 수 있다. 환경 변수 세 가지를 읽고, 변경 요청마다 업무 참조로 만든 요청 키를 붙이며, 통신 오류·429·5xx는 같은 키로 재시도한다.
+
+```sh
+cd /path/to/metanomic/sdk && npm run build
+cd /path/to/your-game && npm install /path/to/metanomic/sdk
+```
+
+```js
+import { Metanomic, MetanomicError } from "@metanomic/game-sdk";
+
+const metanomic = Metanomic.fromEnv(); // METANOMIC_API_URL, METANOMIC_GAME_ID, METANOMIC_GAME_KEY
+await metanomic.rewards.create({
+  recipient: wallet,
+  amount: "10.000000",
+  rewardRef,
+});
+const payment = await metanomic.payments.create({
+  payer: wallet,
+  orderId,
+  amount: "4.000000",
+  item,
+});
+const { url } = await metanomic.payments.checkout(payment.paymentId, {
+  returnUrl,
+});
+```
+
+오류는 `MetanomicError`(`status`, `code`, `retryable`)로 받는다. 전체 메서드는 [SDK README](../sdk/README.md)에 있다. 아래 최소 예제는 SDK 없이 직접 구현할 때 사용한다.
+
+### 직접 구현
 
 Node.js 22 서버에 복사해 사용할 수 있는 최소 예제다. 타임아웃은 요청 결과 불명이며 자동으로 새 주문이나 새 보상 참조를 만들지 않는다.
 
@@ -237,9 +281,20 @@ const payment = await network(`/games/${encodeURIComponent(gameId)}/payments`, {
 // 반환된 paymentId를 기존 로컬 주문에 연결한다.
 ```
 
-같은 `gameId + orderId`의 동일 내용은 기존 결제를 반환한다. 클라이언트가 전달한 가격·이용자 ID로 주문을 만들지 않는다. 결제 객체에는 `checkoutUrl`이 없다.
+같은 `gameId + orderId`의 동일 내용은 기존 결제를 반환한다. 클라이언트가 전달한 가격·이용자 ID로 주문을 만들지 않는다. 결제 객체에는 `checkoutUrl`이 없다. 결제창 링크는 아래 checkout-sessions API로 따로 발급한다.
 
-### 게임 안에서 지갑으로 결제 승인
+### 결제창으로 승인 받기 (권장)
+
+게임이 지갑 서명 화면을 만들지 않고 Metanomic 결제창으로 이용자를 보낸다.
+
+1. 게임 서버가 본인 주문을 확인한 뒤 **게임 API 키**로 `POST /payments/{paymentId}/checkout-sessions`에 `{ "returnUrl": "https://game.example/shop", "cancelUrl": "https://game.example/shop" }`을 보낸다(`Idempotency-Key` 필수, `cancelUrl`은 생략 시 `returnUrl`). 결제가 `CREATED`이고 만료 전일 때만 발급한다.
+2. 응답 `{ checkoutSessionId, paymentId, url, expiresAt }`의 `url`로 이용자 브라우저를 이동시킨다(링크·리다이렉트·새 창). 링크 토큰은 URL의 `#` 뒤에 있어 서버 로그·Referer에 남지 않는다.
+3. 결제창이 상품·수량·금액·결제 지갑·유효 기간을 보여주고 지갑 연결, 네트워크 전환, 결제 승인과 CGC 사용 승인 서명 두 번을 받아 제출한다. 주문의 payer가 아닌 지갑으로는 결제할 수 없다. 가스비는 들지 않는다.
+4. 제출하면 `returnUrl`에 `?paymentId=...&orderId=...&checkout=submitted`를 붙여 돌아오고, 취소하면 `cancelUrl`에 `checkout=cancelled`를 붙여 돌아온다. 기존 조회 문자열은 유지한다.
+
+`checkout=submitted`는 **접수**일 뿐 결제 완료가 아니다. 쿼리 값은 이용자가 바꿀 수 있으므로 아이템 지급 판단에 쓰지 말고, 게임 서버가 `GET /payments/{paymentId}` 또는 웹훅·이벤트로 `PAID`를 확인한 뒤 §7을 진행한다. 링크를 가진 사람은 그 결제 하나의 내용을 볼 수 있지만 payer 지갑의 서명 없이는 결제할 수 없다. 같은 주문에 링크를 다시 발급해도 된다. 결제창은 Metanomic 서버 origin(`APP_ORIGIN`)에서 열리므로 외부 이용자가 접근할 수 있는 주소로 서버를 운영해야 한다.
+
+### 게임 안에서 지갑으로 결제 승인 (직접 구현)
 
 1. 게임 서버가 자체 세션의 주문 소유자를 확인하고 **게임 API 키**로 `GET /payments/{paymentId}`를 호출한다. 해당 게임의 결제인지 Metanomic이 검사하며, `CREATED` 상태에서는 최신 `permit` 서명 요청도 반환한다. 결제 내용을 게임 클라이언트에 전달하고 API 키는 서버에 둔다.
 2. 게임·상품·수량·금액·지갑을 표시하고 이용자 승인을 받는다. 결제 객체의 배포와 지갑 네트워크가 일치해야 한다.
@@ -308,7 +363,7 @@ CREATED → PROCESSING → PAID → DELIVERY_CLAIMED → COMPLETED
 | 아이템 지급 기록        | paymentId 유일, 지급 결과와 deliveryRef                          |
 | 작업 처리 위치          | 마지막 처리 이벤트 cursor와 재시도할 업무                        |
 
-게임 서버에서 초기에는 약 1초 간격의 단일 폴링 작업을 실행할 수 있다. 한 번의 순회가 겹치지 않도록 한다. 이벤트 조회는 최대 100건씩 반환한다.
+웹훅이 없으면 약 1초 간격의 단일 폴링 작업을 실행한다. 웹훅을 쓰면 웹훅으로 즉시 반응하고, 아래 복구 순회는 시작 시와 수십 초~수 분 간격으로 유지한다. 한 번의 순회가 겹치지 않도록 한다. 이벤트 조회는 최대 100건씩 반환한다.
 
 ```http
 GET /v1/games/game-1a2b3c4d/events?cursor=0
@@ -326,6 +381,59 @@ Authorization: Bearer <게임 자격증명>
 
 응답은 `{ payments, nextCursor }`이며 비어 있는 페이지까지 `nextCursor`로 순회한다. 이 조회 커서는 이벤트 커서와 별개다. 주문 화면의 종료·만료 상태 동기화에는 저장된 `paymentId`의 개별 조회도 사용한다. [예제 게임의 tick과 grant](../src/game.ts)가 실제 복구 흐름을 구현한다.
 
+### 웹훅
+
+웹훅은 위 이벤트 조회와 **같은 이벤트**를 게임 서버 주소로 보낸다. 웹훅을 써도 시작·재시작 복구 순회는 유지한다. 웹훅은 빠른 반응을 위한 것이고 정합성은 결제 목록 순회가 보장한다.
+
+1. 운영자가 포털 **게임 서버 연결 → 웹훅 (선택) → 웹훅 등록**에서 받을 주소와 이름을 입력한다. API로는 운영자 세션으로 `POST /games/{gameId}/webhooks`에 `{ "url": "https://game.example/metanomic/webhook", "label": "운영 서버" }`를 보낸다. 게임 API 키로는 등록할 수 없다. 게임당 5개까지다.
+2. 응답의 `secret`(`whsec_...`)은 한 번만 표시된다. 게임 서버의 `METANOMIC_WEBHOOK_SECRET`에 보관한다.
+3. **테스트 전송**(`POST /games/{gameId}/webhooks/{webhookId}/tests`)은 `webhook.test` 이벤트를 한 번 보내고 결과를 바로 알려준다. 이벤트 기록과 커서에는 영향이 없다.
+
+요청은 `POST`, `Content-Type: application/json`이고 본문은 이벤트 하나다.
+
+```json
+{
+  "eventId": "operation:op-...:true",
+  "type": "pay.finalized",
+  "gameId": "game-1a2b3c4d",
+  "resourceId": "payment-...",
+  "payload": { "operationId": "op-...", "error": null },
+  "cursor": 42
+}
+```
+
+헤더 `Metanomic-Signature: t=<Unix 초>,v1=<hex>`의 `v1`은 `HMAC-SHA256(secret, "<t>.<원문 본문>")`이다. **파싱 전 원문 본문**으로 검증하고, `t`가 현재 시각과 5분 이상 차이 나면 거절한다. 그 밖에 `Metanomic-Event-Id`, `Metanomic-Webhook-Id` 헤더가 있다. SDK의 `verifyWebhook(rawBody, signatureHeader, secret)`가 검증과 파싱을 한다.
+
+```js
+import { verifyWebhook } from "@metanomic/game-sdk";
+
+// Express 예시: 서명 검증에는 파싱 전 원문(Buffer)이 필요하다.
+app.post(
+  "/metanomic/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    let event;
+    try {
+      event = verifyWebhook(
+        req.body,
+        req.get("metanomic-signature"),
+        process.env.METANOMIC_WEBHOOK_SECRET,
+      );
+    } catch {
+      return res.sendStatus(401);
+    }
+    await enqueueSync(event); // 큐에 넣고 바로 응답한다. 상태는 GET /payments/{id}로 다시 확인한다.
+    res.sendStatus(204);
+  },
+);
+```
+
+- 2xx 응답만 성공이다. 실패·10초 초과·리다이렉트는 5초부터 두 배씩 최대 1시간 간격으로 같은 이벤트를 재시도하며, 성공할 때까지 그 웹훅의 다음 이벤트를 보내지 않는다. 따라서 순서는 `cursor` 순으로 유지되고 같은 이벤트가 두 번 올 수 있다. `eventId`로 중복을 걸러낸다.
+- 오래 걸리는 처리는 큐에 넣고 바로 2xx로 응답한다. 이벤트 본문의 상태를 그대로 믿지 말고 결제·보상을 다시 조회해 현재 상태로 처리한다(§7).
+- 등록 시점 이후의 이벤트부터 보낸다. 웹훅 목록(`GET /games/{gameId}/webhooks`)과 포털 화면에서 대기 이벤트 수, 연속 실패 횟수, 마지막 오류를 확인한다.
+
+주요 이벤트 `type`: `reward.finalized`/`reward.failed`, `pay.finalized`/`pay.failed`(결제 체인 처리), `claimDelivery.finalized`, `fulfill.finalized`, `refund.finalized`, `chain.<계약 이벤트>`, `budget.reconciled`.
+
 ## 9. 요청 키·오류·대기 시간
 
 업무 변경 요청에는 OpenAPI에 정의된 `Idempotency-Key`를 보낸다. 동일 주체·경로의 같은 키와 같은 본문은 기존 결과, 같은 키와 다른 본문은 409다. 보상·주문은 별도로 업무 참조까지 중복 검사한다. 예를 들어 `"4"`와 `"4.000000"`도 재시도 본문에서는 변경하지 않는다. 기존 요청을 보존한다.
@@ -339,6 +447,7 @@ Authorization: Bearer <게임 자격증명>
 | 409 BUDGET_EXCEEDED                                    | 예산·예약을 확인하고 예산을 확보한다.                                           |
 | 409 INVALID_PAYMENT_STATE / PAYMENT_NOT_PAYABLE        | 결제를 재조회하고 현재 상태·만료에 맞춰 처리한다.                               |
 | 422                                                    | 입력 형식, 계정·지갑 연결, 서명과 만료를 확인한다.                              |
+| 404 CHECKOUT_NOT_FOUND                                 | 결제창 링크가 잘못됐다. 게임 서버에서 새 링크를 발급한다.                       |
 | 타임아웃·503·일시 통신 실패                            | 지연을 두고 기존 업무·작업을 조회한다. 키·본문을 유지해 재시도한다.             |
 
 작업은 `QUEUED → PREPARED → SUBMITTED → INCLUDED → FINALIZED`다. `RECONCILING`은 결과 확인 중이며 실패가 아니다. `FAILED`만 확실한 실패다. 접수·포함 상태에서 완료로 표시하지 않는다.
@@ -354,7 +463,9 @@ Saigon은 실제 검증에서 최종 확정까지 약 20~30분을 관측했다. 
 - 아이템 지급 직후·완료 통지 전에 서버를 중단해도 재시작 후 아이템은 하나이며 결제는 COMPLETED가 된다.
 - 결제 수입으로 게임 예산이 4코인 증가하고 그중 1코인을 다시 보상할 수 있다.
 - 환불이 먼저 확정되면 아이템을 지급하지 않는다. 지급 시작 후에는 자동 환불하지 않는다.
-- API 키가 브라우저 산출물·응답·로그에 노출되지 않는다.
+- 결제창을 쓴다면 `checkout=submitted`로 돌아온 것만으로 아이템을 주지 않고, 서버에서 PAID를 확인한 뒤 지급한다. 취소(`checkout=cancelled`)·만료 후 재주문도 처리한다.
+- 웹훅을 쓴다면 서명·시각을 검증하고 `eventId` 중복을 처리하며, 웹훅이 멈춰도 복구 순회로 결제가 완료된다.
+- API 키와 웹훅 비밀값이 브라우저 산출물·응답·로그에 노출되지 않는다.
 - UI가 접수·확정·아이템 지급을 구분하며, 실패·재시도·복구 중 상태를 표시한다.
 
 같은 저장소를 변경했다면 해당 변경에 맞는 검사와 기존 `npm run check`를 실행한다. UI 변경에는 `npm run build:web`와 실제 브라우저 확인을 추가한다. 테스트는 격리된 DB·체인을 사용하고 사용 중인 개발 DB를 초기화하지 않는다. 타 게임 저장소에서는 해당 프로젝트 검사와 위 API 통합 시나리오를 실행한다. [에이전트 작업 템플릿](AGENT_GAME_INTEGRATION_TASK.md)에 결과를 보고하는 형식까지 정리되어 있다.

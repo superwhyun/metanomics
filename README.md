@@ -5,11 +5,37 @@
 ## 다른 게임에 연동하기
 
 - [게임 개발자 연동 가이드](docs/GAME_INTEGRATION.md): 서버 설정, 게임 지갑 로그인, 주소 기반 보상·결제 요청 예제, 아이템 지급과 재시작 복구, 완료 기준.
+- [게임 서버 SDK](sdk/README.md): 보상·결제·결제창·아이템 지급·웹훅 검증을 감싼 Node.js 클라이언트(`@metanomic/game-sdk`).
 - [다른 에이전트에 전달할 작업 지시서](docs/AGENT_GAME_INTEGRATION_TASK.md): 대상 게임 경로와 게임 ID를 채워 전달하는 구현 작업 템플릿.
 - [지갑과 권한 구조](docs/WALLETS.md): 관리자·중계 지갑, 관리자 로그인 지갑, 운영자·이용자 지갑의 권한과 관계, 신뢰 모델, 운영 체크리스트.
 - [OpenAPI JSON](docs/openapi.json): 실제 API 요청·응답 스키마. 실행 중인 서버에서는 <http://localhost:3300/docs>로 확인합니다.
 
-게임 등록은 사용자 카탈로그 공개까지 담당합니다. 보상·결제에는 게임 서버 연동이 필요합니다. 현재 범용 로그인 리다이렉트·호스팅 결제창·배포용 SDK는 제공하지 않으며, 외부 게임의 지갑 로그인·결제 승인 화면은 각 게임에서 구현합니다. 일반 이용자는 Metanomic 가입이나 게임별 연결 코드 없이 게임에 지갑으로 로그인해 보상을 받습니다.
+게임 등록은 사용자 카탈로그 공개까지 담당합니다. 보상·결제에는 게임 서버 연동이 필요합니다. 게임 서버 SDK([`sdk/`](sdk/README.md)), 호스팅 결제창(`POST /v1/payments/{paymentId}/checkout-sessions`), 서명된 웹훅을 제공하므로 게임은 지갑 로그인과 상품·지급 로직만 구현하면 됩니다. 범용 로그인 리다이렉트는 아직 없어 외부 게임의 지갑 로그인은 각 게임에서 구현합니다. 일반 이용자는 Metanomic 가입이나 게임별 연결 코드 없이 게임에 지갑으로 로그인해 보상을 받습니다.
+
+게임 서버에서의 기본 사용 흐름은 다음과 같습니다. 자세한 설치와 메서드는 [SDK 문서](sdk/README.md)를 참고하세요.
+
+```js
+import { Metanomic } from "@metanomic/game-sdk";
+const metanomic = Metanomic.fromEnv(); // 포털에서 복사한 환경 변수 3개
+
+// 보상: 같은 rewardRef는 한 번만 지급
+await metanomic.rewards.create({
+  recipient: wallet,
+  amount: "10.000000",
+  rewardRef,
+});
+
+// 결제: 주문 생성 → 결제창으로 이동 → PAID 확인 후 지급
+const payment = await metanomic.payments.create({
+  payer: wallet,
+  orderId,
+  amount: "4.000000",
+  item,
+});
+const { url } = await metanomic.payments.checkout(payment.paymentId, {
+  returnUrl,
+});
+```
 
 ## 서버 실행
 
@@ -27,6 +53,16 @@ npm run dev
 - OpenAPI UI: <http://localhost:3300/docs>
 - OpenAPI JSON: <http://localhost:3300/openapi.json>
 - 블록체인 연결: 외부 Ronin Saigon RPC
+
+서버는 기본적으로 `0.0.0.0:3300`에서 외부 연결을 받습니다. 외부에서 접속하려면 `var/saigon.env`의 `APP_ORIGIN`을 브라우저에서 사용할 실제 주소로 설정하세요. 지갑 로그인과 브라우저 요청 검증에 사용하는 주소이므로 접속 주소와 일치해야 합니다.
+
+```sh
+APP_ORIGIN=http://서버IP:3300 npm run dev
+# HTTPS 프록시를 사용하는 경우
+APP_ORIGIN=https://metanomic.example.com npm run dev
+```
+
+직접 접속은 서버 방화벽·클라우드 보안 그룹에서 TCP 3300을 허용해야 하며, 공유기 뒤에 있다면 포트 포워딩도 필요합니다. 인터넷에서 지갑을 연결하려면 HTTPS 도메인 사용을 권장합니다. 프록시를 같은 서버에서 실행하면 `HOST=127.0.0.1`로 내부 연결만 허용할 수 있습니다. `PORT`는 내부 서버 포트이며 공개 주소의 포트와 달라도 됩니다.
 
 시작 시 기존 계약과 중계 권한을 검증합니다. 성공하면 API가 실행되며, 종료는 터미널에서 Ctrl+C입니다. 포트를 다른 서버가 사용하거나 하위 프로세스가 종료되면 원인을 알리고 함께 종료합니다. API만 실행하려면 `node --env-file=var/saigon.env --import tsx src/main.ts`를 사용합니다.
 
@@ -54,16 +90,6 @@ npm run dev
 관련 API는 `POST /v1/operator-applications/challenges`, `POST /v1/operator-applications`, `GET /v1/operator-applications`, 관리자 승인·반려 경로입니다.
 
 ## 운영자의 게임 등록과 이용자 공개
-서버는 기본적으로 `0.0.0.0:3300`에서 외부 연결을 받습니다. 외부에서 접속하려면 `var/saigon.env`의 `APP_ORIGIN`을 브라우저에서 사용할 실제 주소로 설정하세요. 지갑 로그인과 브라우저 요청 검증에 사용하는 주소이므로 접속 주소와 일치해야 합니다.
-
-```sh
-APP_ORIGIN=http://서버IP:3300 npm run dev
-# HTTPS 프록시를 사용하는 경우
-APP_ORIGIN=https://metanomic.example.com npm run dev
-```
-
-직접 접속은 서버 방화벽·클라우드 보안 그룹에서 TCP 3300을 허용해야 하며, 공유기 뒤에 있다면 포트 포워딩도 필요합니다. 인터넷에서 지갑을 연결하려면 HTTPS 도메인 사용을 권장합니다. 프록시를 같은 서버에서 실행하면 `HOST=127.0.0.1`로 내부 연결만 허용할 수 있습니다. `PORT`는 내부 서버 포트이며 공개 주소의 포트와 달라도 됩니다.
-
 
 1. 운영자 계정으로 로그인하고 **게임 등록 신청**을 작성합니다. 이름, 장르, 소개, 실행할 웹 주소를 입력하면 게임 ID(`game-` + 무작위 8자리)는 서버가 발급합니다.
 2. 관리자 `admin` 계정으로 로그인해 **게임 등록 신청 검토**에서 승인합니다. 반려할 때는 사유를 남기며, 운영자는 신청 현황의 **다시 신청**으로 내용을 보완해 같은 게임 ID로 다시 신청합니다.
@@ -111,7 +137,7 @@ Ronin에서 Sign을 눌렀어도 지갑이 서명값 대신 `WALLET_IS_LOCKED`�
 
 ## 검증과 산출물
 
-지갑 별명 브라우저 회귀 테스트는 `npx playwright install chromium`을 한 번 실행한 후 `npm run test:wallet-aliases:web`으로 실행합니다. 격리된 메모리 DB·임의 포트의 API·모의 지갑 서명을 사용하며 기존 서버·DB·실제 Ronin 확장 프로그램에 연결하지 않습니다.
+브라우저 테스트(운영자 연결·웹훅 관리, 결제창, 지갑 별명 등)는 `npx playwright install chromium`을 한 번 실행한 후 `npm run test:web`으로 실행합니다. 지갑 별명만 확인하려면 `npm run test:wallet-aliases:web`을 사용합니다. 격리된 메모리 DB·임의 포트의 API·모의 지갑 서명을 사용하며 기존 서버·DB·실제 Ronin 확장 프로그램에 연결하지 않습니다.
 
 ```sh
 npm run check
@@ -123,8 +149,9 @@ npm audit
 `check`는 TypeScript 검사, Solidity 컴파일, 실제 Anvil 계약·HTTP·게임 DB 통합 테스트를 실행합니다. 테스트는 임시 디렉터리와 임의 포트를 사용하며 개발 DB를 바꾸지 않습니다.
 
 - 계약: `contracts/`
-- 공통 API·서명·복구: `src/`
-- 브라우저 화면: `web/`, `public/`
+- 공통 API·서명·복구: `src/` (웹훅 발송: `src/webhooks.ts`)
+- 게임 서버 SDK: `sdk/` — `npm run sdk:build`로 `sdk/dist` 생성
+- 브라우저 화면: `web/`, `public/` (호스팅 결제창: `web/checkout.ts`, `public/checkout.html`)
 - 독립 예제 게임: `src/game.ts`, `src/game-main.ts`
 - 생성된 API 규격: `docs/openapi.json` — 런타임의 요청·응답 스키마에서 생성
 - 운영 규칙: [설계·복구 명세](docs/DESIGN.md)
@@ -191,4 +218,4 @@ npx tsx scripts/recovery-lock.ts game-b PAYMENT_ID 0xEVIDENCE_HASH
 
 ### 운영자의 게임 서버 연결 정보
 
-게임 운영자 계정의 **게임 서버 연결** 메뉴에서 승인된 게임별 API 주소·게임 ID·게임 API 키 발급을 한곳에서 제공합니다. 발급 직후 **환경 변수 설정 복사**, **실행 명령 복사**로 실제 키를 포함한 게임 서버 설정을 가져갈 수 있습니다. API 키는 발급 시 한 번만 표시되며 새로고침·로그아웃 뒤에는 다시 보이지 않습니다. 기존 키는 이름·범위·발급 기록을 확인하거나 폐기할 수 있습니다. `.env`를 자동으로 읽지 않는 게임은 게임 프로젝트 폴더에서 복사한 실행 명령을 사용하세요. 다른 컴퓨터의 게임 서버에는 접근 가능한 Metanomic 주소를 설정해야 합니다.
+게임 운영자 계정의 **게임 서버 연결** 메뉴에서 승인된 게임별 API 주소·게임 ID·게임 API 키 발급을 한곳에서 제공합니다. 발급 직후 **환경 변수 설정 복사**, **실행 명령 복사**로 실제 키를 포함한 게임 서버 설정을 가져갈 수 있습니다. API 키는 발급 시 한 번만 표시되며 새로고침·로그아웃 뒤에는 다시 보이지 않습니다. 기존 키는 이름·범위·발급 기록을 확인하거나 폐기할 수 있습니다. `.env`를 자동으로 읽지 않는 게임은 게임 프로젝트 폴더에서 복사한 실행 명령을 사용하세요. 다른 컴퓨터의 게임 서버에는 접근 가능한 Metanomic 주소를 설정해야 합니다. 같은 화면의 **웹훅 (선택)**에서 결제·보상 상태 변경을 받을 게임 서버 주소를 등록하고, 한 번만 표시되는 서명 비밀값 보관, 테스트 전송, 전송 상태 확인, 삭제를 할 수 있습니다.

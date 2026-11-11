@@ -50,6 +50,9 @@ export class Store {
       CREATE INDEX IF NOT EXISTS operator_registrations ON game_registrations(operator_id,status);
       CREATE TABLE IF NOT EXISTS allocation_schedules(id TEXT PRIMARY KEY, game_id TEXT NOT NULL, amount TEXT NOT NULL, cadence TEXT NOT NULL, day INTEGER NOT NULL, active INTEGER NOT NULL, next_run_at INTEGER NOT NULL, last_run_at INTEGER, last_allocation_id TEXT, last_error TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS due_schedules ON allocation_schedules(active,next_run_at);
+      CREATE TABLE IF NOT EXISTS webhook_endpoints(id TEXT PRIMARY KEY, game_id TEXT NOT NULL REFERENCES games(id), url TEXT NOT NULL, label TEXT NOT NULL, secret TEXT NOT NULL, cursor INTEGER NOT NULL, failures INTEGER NOT NULL DEFAULT 0, next_attempt_at INTEGER NOT NULL DEFAULT 0, last_status INTEGER, last_error TEXT, last_delivered_at INTEGER, created_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS game_webhooks ON webhook_endpoints(game_id);
+      CREATE TABLE IF NOT EXISTS checkout_sessions(id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, payment_id TEXT NOT NULL REFERENCES payments(id), game_id TEXT NOT NULL, return_url TEXT NOT NULL, cancel_url TEXT, created_at INTEGER NOT NULL);
     `);
     this.addColumns("game_credentials", {
       label: "TEXT NOT NULL DEFAULT ''",

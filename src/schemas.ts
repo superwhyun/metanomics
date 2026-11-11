@@ -204,6 +204,22 @@ const operatorApplicationSchema = open(
   },
   ["applicationId", "accountId", "wallet", "status", "createdAt"],
 );
+const webhookSchema = open(
+  {
+    webhookId: text,
+    url: text,
+    label: text,
+    cursor: { type: "integer" },
+    pendingEvents: { type: "integer" },
+    failures: { type: "integer" },
+    nextAttemptAt: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    lastStatus: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    lastError: nullableText,
+    lastDeliveredAt: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    createdAt: { type: "integer" },
+  },
+  ["webhookId", "url", "label", "cursor", "pendingEvents", "failures"],
+);
 export function responseSchema(method: string, path: string): any {
   if (
     [
@@ -222,6 +238,62 @@ export function responseSchema(method: string, path: string): any {
         chainId: { type: "integer" },
       },
       ["challengeId", "message", "expiresAt", "address", "chainId"],
+    );
+  if (path === "/games/:gameId/webhooks")
+    return method === "GET"
+      ? open({ webhooks: array(webhookSchema) }, ["webhooks"])
+      : open(
+          {
+            ...webhookSchema.properties,
+            secret: {
+              ...text,
+              description:
+                "HMAC-SHA256 signing secret. Shown only in this response.",
+            },
+          },
+          [...webhookSchema.required, "secret"],
+        );
+  if (path === "/games/:gameId/webhooks/:webhookId/tests")
+    return open(
+      {
+        delivered: { type: "boolean" },
+        status: { anyOf: [{ type: "integer" }, { type: "null" }] },
+        error: nullableText,
+      },
+      ["delivered", "status", "error"],
+    );
+  if (path === "/payments/:paymentId/checkout-sessions")
+    return open(
+      {
+        checkoutSessionId: text,
+        paymentId: text,
+        url: {
+          ...text,
+          description: "Hosted payment page to open in the payer's browser.",
+        },
+        expiresAt: { type: "integer" },
+      },
+      ["checkoutSessionId", "paymentId", "url", "expiresAt"],
+    );
+  if (method === "GET" && path === "/checkout/:token")
+    return open(
+      {
+        checkoutSessionId: text,
+        gameName: text,
+        returnUrl: text,
+        cancelUrl: text,
+        network: open(
+          {
+            id: text,
+            chainId: { type: "integer" },
+            rpcUrl: text,
+            finality: text,
+          },
+          ["id", "chainId", "rpcUrl", "finality"],
+        ),
+        payment: paymentSchema,
+      },
+      ["checkoutSessionId", "returnUrl", "cancelUrl", "network", "payment"],
     );
   if (path === "/account/login-wallets/alias")
     return open({ address: text, alias: nullableText }, ["address", "alias"]);
