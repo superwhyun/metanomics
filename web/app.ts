@@ -1,4 +1,5 @@
 import { renderOperatorIntegration } from "./operator-integration.js";
+import { randomUUID } from "./random.js";
 import { renderPlayerBalance } from "./player-balance.js";
 import {
   WalletAliasCache,
@@ -296,7 +297,7 @@ async function api(
         ? {}
         : {
             "content-type": "application/json",
-            "idempotency-key": crypto.randomUUID(),
+            "idempotency-key": randomUUID(),
           }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -1967,7 +1968,7 @@ on("#issuance-form", "submit", (e) => {
     amount: String(form.amount),
     target: form.target,
     ...(toOperator ? { operatorId: form.operatorId } : {}),
-    issuanceRef: `issue-${crypto.randomUUID()}`,
+    issuanceRef: `issue-${randomUUID()}`,
   };
   const a = latestOverview?.accounting;
   const target = toOperator

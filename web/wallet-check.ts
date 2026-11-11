@@ -1,5 +1,6 @@
 import { toHex, verifyMessage, getAddress, type Hex } from "viem";
 import { WalletDiscovery, type WalletProvider } from "./wallet.js";
+import { randomUUID } from "./random.js";
 const choices = document.querySelector<HTMLElement>("#check-wallets")!;
 const result = document.querySelector<HTMLElement>("#check-result")!;
 const steps = document.querySelector<HTMLElement>("#check-steps")!;
@@ -21,7 +22,7 @@ async function check(provider: WalletProvider, name: string) {
       throw new Error("연결할 계정이 반환되지 않았습니다.");
     const address = getAddress(accounts[0]);
     step(`계정 반환 성공: ${address}`);
-    const message = `Metanomic wallet diagnostic\nOrigin: ${location.origin}\nNonce: ${crypto.randomUUID()}\nPurpose: check message signing only.\nNo login, transaction, token approval, or account linking.`;
+    const message = `Metanomic wallet diagnostic\nOrigin: ${location.origin}\nNonce: ${randomUUID()}\nPurpose: check message signing only.\nNo login, transaction, token approval, or account linking.`;
     step("personal_sign 요청: 지갑에서 진단 메시지를 확인하세요.");
     const signature = await provider.request({
       method: "personal_sign",

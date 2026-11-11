@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:net";
 import { build } from "esbuild";
 import { loadRuntime, requireExternalDeployment } from "../src/runtime.js";
+import { compile } from "./compile.js";
 
 const children: ChildProcess[] = [];
 let closing = false;
@@ -59,11 +60,8 @@ async function main() {
     db.close();
   }
   const port = Number(process.env.PORT ?? 3300);
+  const host = process.env.HOST ?? "0.0.0.0";
   const origin = process.env.APP_ORIGIN ?? config.origin;
-  if (new URL(origin).port !== String(port))
-    throw new Error(
-      "APP_ORIGIN의 포트와 PORT가 다릅니다. 실행 설정을 확인하세요.",
-    );
   for (const checkPort of [port]) {
     await new Promise<void>((resolve, reject) => {
       const server = createServer();
@@ -74,11 +72,12 @@ async function main() {
           ),
         ),
       );
-      server.listen(checkPort, "127.0.0.1", () =>
-        server.close(() => resolve()),
-      );
+      server.listen(checkPort, host, () => server.close(() => resolve()));
     });
   }
+  console.log("계약 ABI·바이트코드 생성 중...");
+  compile();
+  if (closing) return;
   await build({
     entryPoints: ["web/app.ts", "web/wallet-check.ts"],
     bundle: true,

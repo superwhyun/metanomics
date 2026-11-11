@@ -53,7 +53,7 @@ const app = await createApi(store, worker, {
 const timer = setInterval(() => void worker.tick(), 750);
 await app.listen({
   port: Number(process.env.PORT ?? 3300),
-  host: process.env.HOST ?? "127.0.0.1",
+  host: process.env.HOST ?? "0.0.0.0",
 });
 async function close() {
   clearInterval(timer);
