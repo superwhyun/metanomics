@@ -102,8 +102,11 @@ async function fixture(t: any, games = true) {
   await expect(page.locator("#operator-games .loading")).toHaveCount(0);
   const open = () => page.locator('[data-nav="integration"]').click();
   const card = (id: string) => page.locator(`[data-integration-game="${id}"]`);
+  const selectGame = (id: string) =>
+    page.getByLabel("관리할 게임").selectOption(id);
   const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
   const issue = async (id: string, label: string) => {
+    await selectGame(id);
     await card(id)
       .getByRole("button", { name: "게임 API 키 발급", exact: true })
       .click();
@@ -124,7 +127,17 @@ async function fixture(t: any, games = true) {
     fetch(`${origin}/v1/games/${gameId}/budget`, {
       headers: { authorization: `Bearer ${key}` },
     });
-  return { page, store, origin, open, card, clipboard, issue, request };
+  return {
+    page,
+    store,
+    origin,
+    open,
+    card,
+    selectGame,
+    clipboard,
+    issue,
+    request,
+  };
 }
 
 test("operators can find, copy and use all three game connection settings while secrets remain one-time and game-scoped", async (t) => {
@@ -134,8 +147,8 @@ test("operators can find, copy and use all three game connection settings while 
     .first()
     .click();
   await expect(f.page.locator('[data-nav="integration"]')).toHaveAttribute(
-    "aria-selected",
-    "true",
+    "aria-current",
+    "page",
   );
   await expect(f.page.locator("[data-integration-game]")).toHaveCount(2);
   await expect(
@@ -204,6 +217,7 @@ test("operators can find, copy and use all three game connection settings while 
     }),
   );
   assert.ok(!storage.includes(a.token) && !storage.includes(b.token));
+  await f.selectGame("game-nebula");
   await f
     .card("game-nebula")
     .getByRole("button", { name: "키 보관 완료 · 화면에서 숨기기" })
@@ -238,6 +252,7 @@ test("operators can find, copy and use all three game connection settings while 
     fullPage: true,
   });
   await f.page.setViewportSize({ width: 1280, height: 1000 });
+  await f.selectGame("game-harbor");
   const revoke = f
     .card("game-harbor")
     .getByRole("button", { name: "폐기", exact: true });
@@ -254,6 +269,48 @@ test("operators can find, copy and use all three game connection settings while 
   await f.page.locator("#logout").click();
   await expect(f.page.locator("#login-view")).toBeVisible();
   assert.ok(!(await f.page.locator("body").innerHTML()).includes(c.token));
+});
+
+test("a game's connection shortcut and budget preview keep the selected game", async (t) => {
+  const { page, card, selectGame, store } = await fixture(t);
+  await page.setViewportSize({ width: 390, height: 650 });
+  await selectGame("game-harbor");
+  const secondGame = page
+    .locator(".operator-game")
+    .filter({ hasText: "Star Harbor" });
+  await secondGame
+    .getByRole("button", { name: /연결 정보와 API 키 보기/ })
+    .click();
+  await expect(
+    card("game-harbor").getByRole("heading", { name: "Star Harbor" }),
+  ).toBeFocused();
+  await expect(card("game-nebula")).toBeHidden();
+
+  await page.locator("#workspace-menu").click();
+  await page.locator('[data-nav="games"]').click();
+  await expect(page.getByLabel("관리할 게임")).toHaveValue("game-harbor");
+  await secondGame.getByLabel("작업").selectOption("withdrawals");
+  await secondGame.getByLabel("금액 (CGC)").fill("2.750000");
+  await secondGame.getByRole("button", { name: "인출 내용 확인" }).click();
+  const preview = page.getByRole("dialog", { name: "인출 내용을 확인하세요" });
+  await expect(preview).toContainText("2.750000 CGC");
+  await expect(preview).toContainText("보내는 곳Star Harbor의 보상 예산");
+  await expect(preview).toContainText("받는 곳승인 지갑");
+  await preview.getByRole("button", { name: "취소" }).click();
+  await expect(preview).toBeHidden();
+  assert.equal(
+    store.get("SELECT COUNT(*) AS count FROM budget_actions").count,
+    0,
+  );
+  await page.locator("#workspace-menu").click();
+  await page.getByRole("link", { name: "결제 복구" }).click();
+  await expect(page.locator("#resolution-form")).toBeVisible();
+  await page.getByRole("button", { name: /환불 승인에 쓸 지갑 확인/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "현재 로그인한 지갑" }),
+  ).toBeVisible();
+  await expect(page.locator("#wallet-tools summary")).toBeFocused();
+  await expect(page.locator("#resolution-form")).toBeHidden();
 });
 
 test("failed key issuance keeps connection values visible and lets the operator retry", async (t) => {
@@ -352,8 +409,8 @@ test("an operator without approved games gets a registration path, not invented 
     .getByRole("button", { name: "게임 등록 신청하기 →" })
     .click();
   await expect(f.page.locator('[data-nav="register"]')).toHaveAttribute(
-    "aria-selected",
-    "true",
+    "aria-current",
+    "page",
   );
 });
 

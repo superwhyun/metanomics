@@ -50,6 +50,8 @@ export function walletErrorMessage(error: unknown): string {
     seen.add(value);
     if (value.code === "WALLET_IS_LOCKED")
       return "지갑 앱이 서명값을 반환하지 못했습니다. 지갑을 한 번 잠근 뒤 비밀번호로 잠금을 해제하고 다시 시도하세요.";
+    if (value.code === "ORIGIN_DENIED")
+      return "현재 접속 주소에서는 로그인할 수 없습니다. 운영자가 안내한 주소를 http/https와 포트까지 확인해 다시 접속하세요.";
     for (const nested of [
       value.cause,
       value.data,

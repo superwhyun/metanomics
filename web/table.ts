@@ -17,6 +17,7 @@ export interface TableSpec<T> {
   filters?: TableFilter<T>[];
   // Pre-escaped HTML for the expandable detail row.
   detail?: (row: T) => string;
+  detailLabel?: (row: T) => string;
   // Pre-escaped HTML; buttons are handled by delegated listeners.
   actions?: (row: T) => string;
   empty: string;
@@ -63,11 +64,31 @@ export function openTableRow(container: HTMLElement, key: string) {
   draw(container);
 }
 
+export function setTableView(
+  container: HTMLElement,
+  filter: string,
+  query = "",
+) {
+  const state = stateOf(container.id);
+  const search = container.querySelector<HTMLInputElement>(".table-search");
+  if (!search) return;
+  state.filter = Math.max(
+    0,
+    specs
+      .get(container.id)
+      ?.filters?.findIndex((item) => item.label === filter) ?? 0,
+  );
+  state.query = search.value = query;
+  state.page = 0;
+  draw(container);
+}
+
 export function renderTable<T>(container: HTMLElement, spec: TableSpec<T>) {
   specs.set(container.id, spec);
   if (!container.dataset.table) {
     container.dataset.table = "1";
-    container.innerHTML = `<div class="table-toolbar"><input type="search" class="table-search" placeholder="${attr(spec.searchPlaceholder ?? "검색")}" aria-label="검색"><div class="table-filters"></div></div><div class="table-wrap"><table class="data-table"><thead></thead><tbody></tbody></table></div><nav class="table-pager" aria-label="페이지"></nav>`;
+    const searchLabel = attr(spec.searchPlaceholder ?? "검색");
+    container.innerHTML = `<div class="table-toolbar"><input type="search" class="table-search" placeholder="${searchLabel}" aria-label="${searchLabel}"><div class="table-filters"></div></div><div class="table-wrap"><table class="data-table" role="table"><thead role="rowgroup"></thead><tbody role="rowgroup"></tbody></table></div><nav class="table-pager" aria-label="페이지"></nav>`;
     const state = stateOf(container.id);
     container
       .querySelector<HTMLInputElement>(".table-search")!
@@ -91,8 +112,13 @@ export function renderTable<T>(container: HTMLElement, spec: TableSpec<T>) {
         draw(container);
         return;
       }
-      // Clicking a row (not one of its controls) toggles its details.
-      if (target.closest("button, a, input, select, textarea, label")) return;
+      // A real button supports keyboard use, and the row remains a pointer shortcut.
+      const details = target.closest("[data-table-detail]");
+      if (
+        !details &&
+        target.closest("button, a, input, select, textarea, label")
+      )
+        return;
       const row = target.closest<HTMLElement>("tr[data-row-key]");
       if (!row || !specs.get(container.id)?.detail) return;
       const key = row.dataset.rowKey!;
@@ -107,6 +133,14 @@ export function renderTable<T>(container: HTMLElement, spec: TableSpec<T>) {
 function draw(container: HTMLElement) {
   const spec = specs.get(container.id)!;
   const state = stateOf(container.id);
+  const active = document.activeElement as HTMLElement | null;
+  const focusFilter = container.contains(active)
+    ? active?.dataset.tableFilter
+    : undefined;
+  const focusDetail =
+    container.contains(active) && active?.hasAttribute("data-table-detail")
+      ? active.closest<HTMLElement>("[data-row-key]")?.dataset.rowKey
+      : undefined;
   // Keep text typed into detail rows (e.g. a rejection reason) across redraws.
   container
     .querySelectorAll<HTMLInputElement>("[data-keep]")
@@ -116,7 +150,7 @@ function draw(container: HTMLElement) {
   container.querySelector(".table-filters")!.innerHTML = filters
     .map(
       (f, i) =>
-        `<button type="button" class="filter-chip${i === state.filter ? " selected" : ""}" data-table-filter="${i}">${attr(f.label)}<span>${spec.rows.filter(f.match).length}</span></button>`,
+        `<button type="button" class="filter-chip${i === state.filter ? " selected" : ""}" data-table-filter="${i}" aria-pressed="${i === state.filter}">${attr(f.label)}<span>${spec.rows.filter(f.match).length}</span></button>`,
     )
     .join("");
   const query = state.query.trim().toLowerCase();
@@ -137,15 +171,20 @@ function draw(container: HTMLElement) {
     pages <= 1
       ? ""
       : `<button type="button" class="small" data-table-page="${state.page - 1}"${state.page === 0 ? " disabled" : ""}>‹ 이전</button><span>${state.page + 1} / ${pages} <small>· ${rows.length}건</small></span><button type="button" class="small" data-table-page="${state.page + 1}"${state.page === pages - 1 ? " disabled" : ""}>다음 ›</button>`;
-  const span = spec.columns.length + (spec.actions ? 1 : 0);
+  const hasActions = !!(spec.actions || spec.detail);
+  const span = spec.columns.length + Number(hasActions);
   container.querySelector("thead")!.innerHTML =
-    `<tr>${spec.columns.map((c) => `<th class="${c.className ?? ""}">${attr(c.label)}</th>`).join("")}${spec.actions ? "<th></th>" : ""}</tr>`;
+    `<tr role="row">${spec.columns.map((c) => `<th scope="col" role="columnheader" class="${c.className ?? ""}">${attr(c.label)}</th>`).join("")}${hasActions ? '<th scope="col" role="columnheader">작업</th>' : ""}</tr>`;
   container.querySelector("tbody")!.innerHTML = visible.length
     ? visible
         .map((row) => {
           const key = spec.key(row);
           const open = state.open.has(key);
-          return `<tr data-row-key="${attr(key)}" class="${spec.detail ? "expandable" : ""}${open ? " open" : ""}">${spec.columns.map((c) => `<td class="${c.className ?? ""}">${c.cell(row)}</td>`).join("")}${spec.actions ? `<td class="row-actions">${spec.actions(row)}</td>` : ""}</tr>${open && spec.detail ? `<tr class="detail-row"><td colspan="${span}">${spec.detail(row)}</td></tr>` : ""}`;
+          const details = spec.detail
+            ? `<button type="button" class="small quiet" data-table-detail aria-expanded="${open}">${open ? "상세 닫기" : attr(spec.detailLabel?.(row) ?? "상세 보기")}</button>`
+            : "";
+          const actions = `${details}${spec.actions?.(row) ?? ""}`;
+          return `<tr role="row" data-row-key="${attr(key)}" class="${spec.detail ? "expandable" : ""}${open ? " open" : ""}">${spec.columns.map((c) => `<td role="cell" class="${c.className ?? ""}"><span class="mobile-cell-label" aria-hidden="true">${attr(c.label)}</span><div>${c.cell(row)}</div></td>`).join("")}${hasActions ? `<td role="cell" class="row-actions">${actions}</td>` : ""}</tr>${open && spec.detail ? `<tr role="row" class="detail-row"><td role="cell" colspan="${span}">${spec.detail(row)}</td></tr>` : ""}`;
         })
         .join("")
     : `<tr><td class="table-empty" colspan="${span}">${attr(query || state.filter ? "조건에 맞는 항목이 없습니다." : spec.empty)}</td></tr>`;
@@ -155,4 +194,14 @@ function draw(container: HTMLElement) {
       const value = state.kept.get(input.dataset.keep!);
       if (value !== undefined) input.value = value;
     });
+  if (focusFilter !== undefined)
+    container
+      .querySelector<HTMLElement>(`[data-table-filter="${focusFilter}"]`)
+      ?.focus({ preventScroll: true });
+  if (focusDetail !== undefined)
+    container
+      .querySelector<HTMLElement>(
+        `[data-row-key="${CSS.escape(focusDetail)}"] [data-table-detail]`,
+      )
+      ?.focus({ preventScroll: true });
 }

@@ -112,19 +112,32 @@ async function fixture(
     await expect(page.locator("#workspace")).toBeVisible();
     await page.locator('[data-nav="account"]').click();
     await expect(page.locator(".login-wallet-alias")).toHaveCount(2);
+    await expect(page.locator("#current-login-address")).toHaveText(
+      short(wallets[index].address),
+    );
+    await expect(page.locator(".login-wallet-active")).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "로그아웃하고 지갑 연결 초기화" }),
+    ).toBeHidden();
+    await expect(page.getByRole("button", { name: "별명 저장" })).toHaveCount(
+      0,
+    );
   };
-  const form = (index: number) =>
-    page.locator(".login-wallet-alias").filter({
+  const row = (index: number) =>
+    page.locator(".login-wallet-row").filter({
       has: page.locator("code", { hasText: wallets[index].address }),
     });
+  const form = (index: number) => row(index).locator(".login-wallet-alias");
   const save = async (index: number, alias: string) => {
+    if ((await row(index).getAttribute("open")) === null)
+      await row(index).locator("summary").click();
     await form(index).locator("input").fill(alias);
     await form(index).getByRole("button", { name: "별명 저장" }).click();
-    await expect(form(index).locator("strong")).toHaveText(
+    await expect(row(index).locator("summary strong")).toHaveText(
       alias.trim().replace(/\s+/gu, " "),
     );
   };
-  return { page, store, adapter, openChoices, finishLogin, form, save };
+  return { page, store, adapter, openChoices, finishLogin, row, form, save };
 }
 
 test("player balance shows latest tokens and signed provisional changes, with honest RPC failure states", async (t) => {
@@ -239,6 +252,9 @@ test(
     );
     await f.finishLogin();
     await f.save(0, "  게임용   지갑  ");
+    await expect(f.page.locator("#current-login-name")).toHaveText(
+      "게임용 지갑",
+    );
     await f.save(1, "게임용 지갑");
     assert.deepEqual(
       loginWalletDetails(f.store, "owner").map((w) => w.alias),
@@ -269,9 +285,10 @@ test(
     );
     const markup = '<img src=x onerror="alert(1)">';
     await f.save(0, markup);
-    await expect(f.form(0).locator("img")).toHaveCount(0);
+    await expect(f.row(0).locator("img")).toHaveCount(0);
+    await f.row(1).locator("summary").click();
     await f.form(1).getByRole("button", { name: "별명 삭제" }).click();
-    await expect(f.form(1).locator("strong")).toHaveText("이름 미등록");
+    await expect(f.row(1).locator("summary strong")).toHaveText("별명 없음");
     await expect(f.form(1).locator("input")).toHaveValue("");
     await expect(
       f.form(1).getByRole("button", { name: "별명 삭제" }),
@@ -316,7 +333,7 @@ for (const mode of ["blocked", "corrupt"] as const) {
         f.page.locator("#account-choices .account-choice").first(),
       ).toHaveText(`이름 미등록 · ${short(wallets[0].address)}`);
       await f.finishLogin();
-      await expect(f.form(0).locator("strong")).toHaveText("저장 확인");
+      await expect(f.row(0).locator("summary strong")).toHaveText("저장 확인");
     },
   );
 }

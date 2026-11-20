@@ -125,11 +125,7 @@ export function renderOperatorIntegration(
     const empty = node("article", undefined, "panel empty-state");
     empty.append(
       node("h2", "승인된 게임이 아직 없습니다"),
-      node(
-        "p",
-        "게임 등록과 관리자 승인이 끝나면 API 주소·게임 ID·API 키를 여기서 확인할 수 있습니다.",
-        "muted",
-      ),
+      node("p", "게임이 승인되면 여기서 API 키를 발급합니다.", "muted"),
     );
     const register = node("button", "게임 등록 신청하기 →", "primary");
     register.type = "button";
@@ -147,7 +143,7 @@ export function renderOperatorIntegration(
       node("h3", "웹훅 (선택)"),
       node(
         "p",
-        "결제·보상 상태가 바뀌면 게임 서버의 주소로 바로 알립니다. 웹훅을 쓰더라도 재시작 복구용 주기 조회는 유지하세요.",
+        "결제·보상 상태 변경을 즉시 알립니다. 주기 조회는 유지하세요.",
         "muted",
       ),
     );
@@ -226,7 +222,7 @@ export function renderOperatorIntegration(
         list.append(row);
       }
     };
-    const add = node("button", "웹훅 등록", "quiet");
+    const add = node("button", "웹훅 등록", "small");
     add.type = "button";
     add.addEventListener("click", () => {
       created.replaceChildren();
@@ -318,10 +314,7 @@ export function renderOperatorIntegration(
     title.append(node("span", game.id, "eyebrow"), node("h2", game.name));
     const count = node("span", undefined, "pill");
     heading.append(title, count);
-    card.append(
-      heading,
-      node("p", "아래 세 값을 게임 서버의 환경 변수에 설정하세요.", "muted"),
-    );
+    card.append(heading);
     const fields = node("div", undefined, "connection-fields");
     fields.append(
       field("API 주소", "METANOMIC_API_URL", options.apiUrl),
@@ -333,7 +326,7 @@ export function renderOperatorIntegration(
       card.append(
         node(
           "p",
-          "이 주소는 같은 컴퓨터에서 실행하는 게임 서버용입니다. 다른 컴퓨터에서는 접근 가능한 Metanomic 서버 주소를 사용하세요.",
+          "같은 컴퓨터의 게임 서버 전용 주소입니다.",
           "muted connection-note",
         ),
       );
@@ -343,7 +336,7 @@ export function renderOperatorIntegration(
       node("code", "METANOMIC_GAME_KEY", "connection-variable"),
       node(
         "p",
-        "키 값은 발급 직후 한 번만 표시됩니다. 게임 서버에 보관하고, 브라우저 코드에는 넣지 마세요.",
+        "키는 발급 직후 한 번만 표시됩니다. 서버에만 보관하세요.",
         "muted",
       ),
     );
@@ -364,14 +357,7 @@ export function renderOperatorIntegration(
         list.append(node("p", "아직 발급한 API 키가 없습니다.", "muted"));
         return;
       }
-      list.append(
-        node("h4", "발급된 키"),
-        node(
-          "p",
-          "기존 키 값은 다시 볼 수 없습니다. 분실했다면 새 키로 게임 서버 설정을 바꾼 뒤 기존 키를 폐기하세요.",
-          "muted",
-        ),
-      );
+      list.append(node("h4", "발급된 키"));
       for (const credential of records) {
         const row = node("div", undefined, "activity-row");
         const description = node("div");
@@ -386,7 +372,7 @@ export function renderOperatorIntegration(
               new Date(credential.createdAt).toLocaleString("ko-KR"),
             ),
           );
-        const revoke = node("button", "폐기", "quiet");
+        const revoke = node("button", "폐기", "small danger");
         revoke.type = "button";
         let armed = false;
         revoke.addEventListener("click", async () => {
@@ -435,11 +421,7 @@ export function renderOperatorIntegration(
       issued.replaceChildren();
       issued.append(
         node("h4", `${result.label} · 발급 완료`),
-        node(
-          "p",
-          "이 화면을 새로고침하면 키 값은 다시 볼 수 없습니다. 아래 설정을 게임 서버에 보관하세요.",
-          "muted",
-        ),
+        node("p", "새로고침하면 다시 볼 수 없습니다.", "muted"),
       );
       const secret = node("input");
       secret.type = "text";
@@ -467,7 +449,7 @@ export function renderOperatorIntegration(
         actions,
         node(
           "p",
-          ".env를 자동으로 읽는 게임 서버는 환경 변수 설정을 저장하세요. 자동으로 읽지 않으면 실행 명령을 사용하세요. 실행 명령은 macOS/Linux의 npm run dev 기준이며 게임 프로젝트 폴더에서 실행합니다.",
+          ".env에 저장하거나 실행 명령(macOS/Linux, npm run dev)을 사용하세요.",
           "muted",
         ),
       );
@@ -546,7 +528,7 @@ export function renderOperatorIntegration(
       preview,
       node(
         "p",
-        "API 키 발급만으로 게임 서버가 연결되지는 않습니다. 세 값을 설정하고 게임 서버를 재시작한 뒤, 게임 쪽 연결 상태와 사용 가능 예산을 확인하세요.",
+        "API 키 발급만으로 게임 서버가 연결되지는 않습니다. 세 값을 설정하고 서버를 재시작하세요.",
         "connection-next",
       ),
     );
