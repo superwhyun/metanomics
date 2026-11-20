@@ -6,6 +6,7 @@ var/
 artifacts/
 public/app.js
 public/wallet-check.js
+public/checkout.js
 coverage/
 *.sqlite*
 *.log

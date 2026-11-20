@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync } from "node:fs";
+import { createServer } from "node:http";
 import { parseEnv } from "node:util";
 import { chromium } from "playwright";
 import { expect } from "playwright/test";
@@ -101,8 +102,11 @@ async function fixture(t: any, games = true) {
   await expect(page.locator("#operator-games .loading")).toHaveCount(0);
   const open = () => page.locator('[data-nav="integration"]').click();
   const card = (id: string) => page.locator(`[data-integration-game="${id}"]`);
+  const selectGame = (id: string) =>
+    page.getByLabel("관리할 게임").selectOption(id);
   const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
   const issue = async (id: string, label: string) => {
+    await selectGame(id);
     await card(id)
       .getByRole("button", { name: "게임 API 키 발급", exact: true })
       .click();
@@ -123,7 +127,17 @@ async function fixture(t: any, games = true) {
     fetch(`${origin}/v1/games/${gameId}/budget`, {
       headers: { authorization: `Bearer ${key}` },
     });
-  return { page, store, origin, open, card, clipboard, issue, request };
+  return {
+    page,
+    store,
+    origin,
+    open,
+    card,
+    selectGame,
+    clipboard,
+    issue,
+    request,
+  };
 }
 
 test("operators can find, copy and use all three game connection settings while secrets remain one-time and game-scoped", async (t) => {
@@ -133,8 +147,8 @@ test("operators can find, copy and use all three game connection settings while 
     .first()
     .click();
   await expect(f.page.locator('[data-nav="integration"]')).toHaveAttribute(
-    "aria-selected",
-    "true",
+    "aria-current",
+    "page",
   );
   await expect(f.page.locator("[data-integration-game]")).toHaveCount(2);
   await expect(
@@ -203,6 +217,7 @@ test("operators can find, copy and use all three game connection settings while 
     }),
   );
   assert.ok(!storage.includes(a.token) && !storage.includes(b.token));
+  await f.selectGame("game-nebula");
   await f
     .card("game-nebula")
     .getByRole("button", { name: "키 보관 완료 · 화면에서 숨기기" })
@@ -237,6 +252,7 @@ test("operators can find, copy and use all three game connection settings while 
     fullPage: true,
   });
   await f.page.setViewportSize({ width: 1280, height: 1000 });
+  await f.selectGame("game-harbor");
   const revoke = f
     .card("game-harbor")
     .getByRole("button", { name: "폐기", exact: true });
@@ -253,6 +269,48 @@ test("operators can find, copy and use all three game connection settings while 
   await f.page.locator("#logout").click();
   await expect(f.page.locator("#login-view")).toBeVisible();
   assert.ok(!(await f.page.locator("body").innerHTML()).includes(c.token));
+});
+
+test("a game's connection shortcut and budget preview keep the selected game", async (t) => {
+  const { page, card, selectGame, store } = await fixture(t);
+  await page.setViewportSize({ width: 390, height: 650 });
+  await selectGame("game-harbor");
+  const secondGame = page
+    .locator(".operator-game")
+    .filter({ hasText: "Star Harbor" });
+  await secondGame
+    .getByRole("button", { name: /연결 정보와 API 키 보기/ })
+    .click();
+  await expect(
+    card("game-harbor").getByRole("heading", { name: "Star Harbor" }),
+  ).toBeFocused();
+  await expect(card("game-nebula")).toBeHidden();
+
+  await page.locator("#workspace-menu").click();
+  await page.locator('[data-nav="games"]').click();
+  await expect(page.getByLabel("관리할 게임")).toHaveValue("game-harbor");
+  await secondGame.getByLabel("작업").selectOption("withdrawals");
+  await secondGame.getByLabel("금액 (CGC)").fill("2.750000");
+  await secondGame.getByRole("button", { name: "인출 내용 확인" }).click();
+  const preview = page.getByRole("dialog", { name: "인출 내용을 확인하세요" });
+  await expect(preview).toContainText("2.750000 CGC");
+  await expect(preview).toContainText("보내는 곳Star Harbor의 보상 예산");
+  await expect(preview).toContainText("받는 곳승인 지갑");
+  await preview.getByRole("button", { name: "취소" }).click();
+  await expect(preview).toBeHidden();
+  assert.equal(
+    store.get("SELECT COUNT(*) AS count FROM budget_actions").count,
+    0,
+  );
+  await page.locator("#workspace-menu").click();
+  await page.getByRole("link", { name: "결제 복구" }).click();
+  await expect(page.locator("#resolution-form")).toBeVisible();
+  await page.getByRole("button", { name: /환불 승인에 쓸 지갑 확인/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "현재 로그인한 지갑" }),
+  ).toBeVisible();
+  await expect(page.locator("#wallet-tools summary")).toBeFocused();
+  await expect(page.locator("#resolution-form")).toBeHidden();
 });
 
 test("failed key issuance keeps connection values visible and lets the operator retry", async (t) => {
@@ -292,6 +350,53 @@ test("failed key issuance keeps connection values visible and lets the operator 
   assert.equal(f.store.get("SELECT count(*) AS n FROM game_credentials").n, 1);
 });
 
+test("operators register a webhook, keep its one-time secret, test it and delete it", async (t) => {
+  const f = await fixture(t);
+  const received: any[] = [];
+  const server = createServer((req, res) => {
+    received.push(req.headers);
+    req.resume();
+    req.on("end", () => res.writeHead(204).end());
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  t.after(() => new Promise((r) => server.close(r)));
+  const hookUrl = `http://127.0.0.1:${(server.address() as any).port}/hook`;
+  await f.open();
+  const section = f.page.locator('[data-webhooks="game-nebula"]');
+  await expect(section).toContainText("등록된 웹훅이 없습니다.");
+  await section.getByRole("button", { name: "웹훅 등록", exact: true }).click();
+  await section.getByLabel("받을 주소").fill(hookUrl);
+  await section.getByLabel("웹훅 이름").fill("운영 게임 서버");
+  await section.getByRole("button", { name: "등록", exact: true }).click();
+  const secret = section.getByLabel("웹훅 서명 비밀값");
+  await expect(secret).toHaveValue(/^whsec_[0-9a-f]{64}$/);
+  const value = await secret.inputValue();
+  await section.getByRole("button", { name: "환경 변수 복사" }).click();
+  assert.equal(
+    await f.clipboard(),
+    `METANOMIC_WEBHOOK_SECRET=${JSON.stringify(value)}`,
+  );
+  await expect(section).toContainText(hookUrl);
+  await section.getByRole("button", { name: "테스트 전송" }).click();
+  await expect(f.page.locator("#toast")).toHaveText(
+    "테스트 이벤트 전송 성공 (HTTP 204)",
+  );
+  assert.equal(received.length, 1);
+  assert.match(received[0]["metanomic-signature"], /^t=\d+,v1=[0-9a-f]{64}$/);
+  // The other game's card is independent.
+  await expect(f.page.locator('[data-webhooks="game-harbor"]')).toContainText(
+    "등록된 웹훅이 없습니다.",
+  );
+  await f.page.reload();
+  await f.open();
+  await expect(section).toContainText("운영 게임 서버");
+  assert.ok(!(await f.page.locator("body").innerHTML()).includes(value));
+  await section.getByRole("button", { name: "삭제", exact: true }).click();
+  await section.getByRole("button", { name: "정말 삭제", exact: true }).click();
+  await expect(section).toContainText("등록된 웹훅이 없습니다.");
+  assert.equal(f.store.get("SELECT count(*) AS n FROM webhook_endpoints").n, 0);
+});
+
 test("an operator without approved games gets a registration path, not invented connection values", async (t) => {
   const f = await fixture(t, false);
   await f.open();
@@ -304,8 +409,8 @@ test("an operator without approved games gets a registration path, not invented 
     .getByRole("button", { name: "게임 등록 신청하기 →" })
     .click();
   await expect(f.page.locator('[data-nav="register"]')).toHaveAttribute(
-    "aria-selected",
-    "true",
+    "aria-current",
+    "page",
   );
 });
 

@@ -36,7 +36,8 @@ export const keys: any = Object.fromEntries(
     `0x${Buffer.from(account.getHdKey().privateKey!).toString("hex")}`,
   ]),
 );
-export async function fixture(t: any) {
+// staticFiles serves the built portal pages on a fixed origin, for browser tests.
+export async function fixture(t: any, options: { staticFiles?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "metanomic-"));
   const chain = await startLocalChain(await freePort());
   const deployment = await deployContracts(chain.url, 31337, keys);
@@ -49,11 +50,15 @@ export async function fixture(t: any) {
   });
   const adapter = new EvmAdapter(deployment, keys);
   let worker = new Worker(store, new Map([[deployment.id, adapter]]));
-  let app = await createApi(store, worker, {
-    staticFiles: false,
+  const port = options.staticFiles ? await freePort() : 0;
+  const apiOptions = {
+    staticFiles: options.staticFiles ?? false,
     scheduleIntervalMs: 0,
-  });
-  const networkUrl = await app.listen({ port: 0, host: "127.0.0.1" });
+    webhookIntervalMs: 0,
+    ...(port ? { origin: `http://127.0.0.1:${port}` } : {}),
+  };
+  let app = await createApi(store, worker, apiOptions);
+  const networkUrl = await app.listen({ port, host: "127.0.0.1" });
   const call = async (
     token: string | null,
     method: string,
@@ -211,10 +216,7 @@ export async function fixture(t: any) {
     store.close();
     store = new Store(storePath);
     worker = new Worker(store, new Map([[deployment.id, adapter]]));
-    app = await createApi(store, worker, {
-      staticFiles: false,
-      scheduleIntervalMs: 0,
-    });
+    app = await createApi(store, worker, apiOptions);
   }
   t.after(async () => {
     await app.close();

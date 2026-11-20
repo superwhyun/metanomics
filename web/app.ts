@@ -1,14 +1,22 @@
 import { renderOperatorIntegration } from "./operator-integration.js";
+import { randomUUID } from "./random.js";
 import { renderPlayerBalance } from "./player-balance.js";
 import {
   WalletAliasCache,
   renderAccountChoices,
   renderLoginWallets,
+  type NamedWallet,
 } from "./wallet-aliases.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { formatEther, getAddress, keccak256, parseEther, toHex } from "viem";
-import { openTableRow, renderTable } from "./table.js";
-import { initAllocation, renderAllocation } from "./allocation.js";
+import { openTableRow, renderTable, setTableView } from "./table.js";
+import {
+  cgcLabel,
+  cgcUnits,
+  initAllocation,
+  renderAllocation,
+  selectBudgetView,
+} from "./allocation.js";
 import {
   WalletDiscovery,
   assertWalletSession,
@@ -77,95 +85,48 @@ const ROLE_LABELS: Record<Role, string> = {
 // Each role sees its own tabs; elements opt into a tab with data-tab.
 const ROLE_TABS: Record<Role, [string, string][]> = {
   player: [
-    ["play", "게임과 보상"],
-    ["account", "지갑·계정"],
-    ["apply", "게임 운영자 신청"],
+    ["play", "게임"],
+    ["activity", "내역"],
+    ["account", "지갑"],
+    ["apply", "운영자 신청"],
   ],
   operator: [
-    ["games", "내 게임 운영"],
-    ["integration", "게임 서버 연결"],
-    ["register", "게임 등록 신청"],
-    ["account", "지갑·결제 복구"],
+    ["games", "내 게임"],
+    ["integration", "서버 연결"],
+    ["register", "게임 등록"],
+    ["recovery", "결제 복구"],
+    ["account", "지갑"],
   ],
   admin: [
-    ["overview", "현황"],
-    ["review", "등록 심사"],
+    ["overview", "개요"],
+    ["review", "심사"],
     ["budget", "예산·발행"],
-    ["games", "게임 관리"],
+    ["games", "게임"],
     ["ops", "작업·장애"],
     ["audit", "관리 기록"],
-    ["account", "지갑·계정"],
+    ["account", "지갑"],
   ],
 };
 let currentTab = "";
 function roleTabs() {
   return ROLE_TABS[(me?.role as Role) ?? "player"] ?? ROLE_TABS.player;
 }
-// The page heading names the current tab's job instead of a fixed role title.
-const TAB_HEADINGS: Record<Role, Record<string, [string, string]>> = {
-  player: {
-    play: [
-      "게임과 보상",
-      "게임에서 지갑으로 로그인하고, 받은 CGC를 다른 게임에서도 사용하세요.",
-    ],
-    account: ["지갑·계정", "조회할 지갑과 로그인 지갑의 별명을 관리합니다."],
-    apply: [
-      "게임 운영자 신청",
-      "게임을 등록하고 보상 예산을 운영하려면 운영자 승인을 받으세요.",
-    ],
-  },
-  operator: {
-    games: ["내 게임 운영", "게임별 보상 예산과 API 연동을 관리합니다."],
-    integration: [
-      "게임 서버 연결",
-      "API 주소·게임 ID·API 키를 확인하고 게임 서버에 설정하세요.",
-    ],
-    register: [
-      "게임 등록 신청",
-      "새 게임을 신청하고 심사 현황을 확인합니다. 승인되면 이용자 목록에 공개됩니다.",
-    ],
-    account: [
-      "지갑·결제 복구",
-      "승인 지갑과 로그인 지갑을 확인하고, 지급이 멈춘 결제를 복구합니다.",
-    ],
-  },
-  admin: {
-    overview: [
-      "현황",
-      "처리가 필요한 일, 운영 지갑 가스, 네트워크 자금 현황을 확인합니다.",
-    ],
-    review: [
-      "등록 심사",
-      "게임 운영자 신청과 게임 등록 신청을 승인하거나 반려합니다.",
-    ],
-    budget: [
-      "예산·발행",
-      "게임에 보상 예산을 배분하고, 발행 한도 안에서 CGC를 추가 발행합니다.",
-    ],
-    games: [
-      "게임 관리",
-      "게임을 켜고 끄거나, 블록체인에 중지·재개를 기록하거나, 삭제합니다.",
-    ],
-    ops: [
-      "작업·장애",
-      "블록체인 거래의 진행·실패와 지연된 결제를 확인하고 처리합니다.",
-    ],
-    audit: ["관리 기록", "누가 언제 어떤 관리 작업을 했는지 기록합니다."],
-    account: [
-      "지갑·계정",
-      "관리자 로그인 지갑과 계약 서명용 승인 지갑을 관리합니다.",
-    ],
-  },
-};
-function selectTab(tab: string) {
+function setWorkspaceMenu(open: boolean) {
+  $("#workspace-menu").setAttribute("aria-expanded", String(open));
+}
+function selectTab(tab: string, keepHistory = false) {
   const tabs = roleTabs();
   currentTab = tabs.some(([id]) => id === tab) ? tab : tabs[0][0];
   const role = (me?.role as Role) ?? "player";
-  const heading = TAB_HEADINGS[role]?.[currentTab];
-  if (heading) {
-    $(`#${role}-view .page-heading h1`).textContent = heading[0];
-    $(`#${role}-view .page-heading .role-lead`).textContent = heading[1];
-  }
+  const currentLabel = tabs.find(([id]) => id === currentTab)?.[1] ?? "";
+  $("#workspace-menu-label").textContent = currentLabel;
+  $("#workspace-menu").setAttribute(
+    "aria-label",
+    `메뉴, 현재 화면 ${currentLabel}`,
+  );
+  setWorkspaceMenu(false);
+  const heading = document.querySelector(`#${role}-view .page-heading h1`);
+  if (heading) heading.textContent = currentLabel;
   document
     .querySelectorAll<HTMLElement>("#workspace [data-tab]")
     .forEach((el) =>
@@ -175,20 +136,23 @@ function selectTab(tab: string) {
       ),
     );
   document
-    .querySelectorAll<HTMLButtonElement>("#navigation [data-nav]")
+    .querySelectorAll<HTMLAnchorElement>("#navigation [data-nav]")
     .forEach((b) => {
       const selected = b.dataset.nav === currentTab;
       b.classList.toggle("selected", selected);
-      b.setAttribute("aria-selected", String(selected));
+      if (selected) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
     });
-  if (location.hash !== `#${currentTab}`)
-    history.replaceState(null, "", `#${currentTab}`);
+  if (location.hash !== `#${currentTab}`) {
+    if (keepHistory) history.pushState(null, "", `#${currentTab}`);
+    else history.replaceState(null, "", `#${currentTab}`);
+  }
 }
 function renderNav() {
   $("#navigation").innerHTML = roleTabs()
     .map(
       ([id, label]) =>
-        `<button type="button" role="tab" data-nav="${id}">${esc(label)}<span class="tab-count hidden" data-count-for="${id}"></span></button>`,
+        `<a href="#${id}" data-nav="${id}">${esc(label)}<span class="tab-count hidden" data-count-for="${id}"></span></a>`,
     )
     .join("");
   selectTab(location.hash.slice(1));
@@ -199,11 +163,20 @@ function setTabCount(tab: string, count: number, tone = "pending") {
   el.textContent = String(count);
   el.className = `tab-count ${tone}${count ? "" : " hidden"}`;
 }
+function revealSection(section: HTMLElement, startOfPage = false) {
+  if (section instanceof HTMLDetailsElement) section.open = true;
+  const heading = section.querySelector<HTMLElement>("h2, summary") ?? section;
+  if (heading.tagName !== "SUMMARY") heading.tabIndex = -1;
+  heading.focus({ preventScroll: true });
+  if (startOfPage) window.scrollTo({ top: 0 });
+  else section.scrollIntoView({ block: "start" });
+}
 interface StepAction {
   label: string;
   goto?: string;
   click?: string;
   focus?: string;
+  gameId?: string;
 }
 interface Step {
   title: string;
@@ -219,13 +192,15 @@ function renderSteps(
   const next = steps.findIndex((s) => !s.done);
   const doneCount = steps.filter((s) => s.done).length;
   $(progressSelector).textContent = `${doneCount} / ${steps.length} 완료`;
+  const guide = $(listSelector).closest("details");
+  if (guide) guide.hidden = doneCount === steps.length;
   $(listSelector).innerHTML = steps
     .map((s, i) => {
       const state = s.done ? "done" : i === next ? "current" : "upcoming";
       const a = s.action;
       const button =
         state === "current" && a
-          ? `<button type="button" class="primary" ${a.goto ? `data-goto="${esc(a.goto)}"` : ""} ${a.click ? `data-step-click="${esc(a.click)}"` : ""} ${a.focus ? `data-step-focus="${esc(a.focus)}"` : ""}>${esc(a.label)} →</button>`
+          ? `<button type="button" class="primary" ${a.goto ? `data-goto="${esc(a.goto)}"` : ""} ${a.click ? `data-step-click="${esc(a.click)}"` : ""} ${a.focus ? `data-step-focus="${esc(a.focus)}"` : ""} ${a.gameId ? `data-operator-game-target="${esc(a.gameId)}"` : ""}>${esc(a.label)} →</button>`
           : "";
       return `<li class="step-item ${state}"><span class="step-dot" aria-hidden="true">${s.done ? "✓" : i + 1}</span><div class="step-body"><strong>${esc(s.title)}</strong><span>${esc(s.done ? "완료" : s.detail)}</span></div>${button}</li>`;
     })
@@ -238,15 +213,18 @@ let me: any,
   localAccount: any,
   address: `0x${string}` | undefined,
   currentPayment: any,
-  issuance: any,
   latestOverview: any;
 let refreshBusy = false;
+let checkoutLoading = false;
 let operatorRegistrations: any[] = [];
+let selectedOperatorGameId = "";
 let catalogGames: any[] = [];
 const walletDiscovery = new WalletDiscovery(window);
 const walletAliases = new WalletAliasCache();
 let walletProvider: WalletProvider | undefined;
 let walletChainId: number | undefined;
+let approvalWallet: string | undefined;
+let connectedWalletName: string | undefined;
 let stopWalletEvents: (() => void) | undefined;
 let authBusy = false;
 let sessionEpoch = 0;
@@ -261,16 +239,24 @@ function resetSession() {
   currentPayment = undefined;
   walletProvider = undefined;
   walletChainId = undefined;
+  approvalWallet = undefined;
+  connectedWalletName = undefined;
   stopWalletEvents?.();
   stopWalletEvents = undefined;
   catalogKey = "";
+  selectedOperatorGameId = "";
+  delete document.body.dataset.role;
+  budgetProgress.clear();
   $("#operator-integration").replaceChildren();
   renderPlayerBalance($("#player-balance"));
   show("#login-view", true);
   show("#workspace", false);
   show("#logout", false);
   $("#identity").textContent = "";
-  $("#signer-address").textContent = "현재 지갑이 연결되지 않았습니다.";
+  $("#login-wallets").replaceChildren();
+  show("#balance-wallet-note", false);
+  $("#wallet-tools").removeAttribute("open");
+  $("#account-reset-details").removeAttribute("open");
   for (const dialog of document.querySelectorAll<HTMLDialogElement>(
     "dialog[open]",
   ))
@@ -287,6 +273,7 @@ async function api(
   path: string,
   body?: any,
   method = body === undefined ? "GET" : "POST",
+  retryKey?: string,
 ) {
   const response = await fetch(`/v1${path}`, {
     method,
@@ -296,14 +283,17 @@ async function api(
         ? {}
         : {
             "content-type": "application/json",
-            "idempotency-key": crypto.randomUUID(),
+            "idempotency-key": retryKey ?? randomUUID(),
           }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const result = await response.json();
   if (response.status === 401 && !path.startsWith("/sessions")) resetSession();
-  if (!response.ok) throw new Error(result.error?.message ?? "요청 실패");
+  if (!response.ok)
+    throw Object.assign(new Error(result.error?.message ?? "요청 실패"), {
+      code: result.error?.code,
+    });
   return result;
 }
 function on(
@@ -443,7 +433,8 @@ async function connectWallet(purpose?: string) {
   wallet.provider.on?.("accountsChanged", accountsChanged);
   stopWalletEvents = () =>
     wallet.provider.removeListener?.("accountsChanged", accountsChanged);
-  $("#signer-address").textContent = `승인 지갑: ${wallet.name} · ${address}`;
+  connectedWalletName = wallet.name;
+  renderSigningWallet();
 }
 async function signingProvider() {
   if (!walletProvider || !address) await connectWallet();
@@ -471,26 +462,62 @@ async function signTyped(request: any) {
     ],
   });
 }
+function renderCurrentLoginWallet(
+  loginAddress: string | null,
+  alias?: string | null,
+) {
+  $("#current-login-name").textContent = loginAddress
+    ? (alias ?? "")
+    : "이 세션에서 사용 중인 로그인 지갑이 없습니다.";
+  const displayedAddress = $("#current-login-address");
+  displayedAddress.textContent = loginAddress ? short(loginAddress) : "";
+  displayedAddress.title = loginAddress ?? "";
+}
+
+function renderSigningWallet() {
+  $("#approval-wallet").textContent = approvalWallet ?? "";
+  show("#connect-signer", !!approvalWallet);
+  $("#signer-address").textContent = !approvalWallet
+    ? "등록된 승인 지갑이 없습니다."
+    : !address
+      ? "승인 지갑 연결 대기"
+      : address.toLowerCase() === approvalWallet.toLowerCase()
+        ? `${connectedWalletName ?? "지갑"} 연결됨`
+        : `지금 연결한 ${short(address)} 주소와 다릅니다. 승인 지갑을 선택하세요.`;
+}
+
 async function refreshLoginWallets() {
   const epoch = sessionEpoch;
   const result = await api("/account/login-wallets");
   if (epoch !== sessionEpoch || !token) return;
-  walletAliases.remember(result.wallets);
-  $("#approval-wallet").textContent = result.signingWallet
-    ? `등록된 승인 지갑: ${result.signingWallet} · 계약 서명은 이 지갑으로 합니다.`
-    : "등록된 승인 지갑이 없습니다.";
+  const wallets: NamedWallet[] = result.wallets;
+  walletAliases.remember(wallets);
+  const loginAddress = sessionStorage.getItem("metanomic-login-wallet");
+  const isLoginWallet = (wallet: NamedWallet) =>
+    wallet.address.toLowerCase() === loginAddress?.toLowerCase();
+  renderCurrentLoginWallet(loginAddress, wallets.find(isLoginWallet)?.alias);
+  $("#login-wallet-count").textContent = `${wallets.length}개`;
+  approvalWallet = result.signingWallet ?? undefined;
+  renderSigningWallet();
   renderLoginWallets(
     $("#login-wallets"),
-    result.wallets,
+    wallets,
+    loginAddress,
     async (wallet) => {
       if (epoch !== sessionEpoch || !token)
         throw new Error("다시 로그인하세요.");
-      const saved = await api("/account/login-wallets/alias", wallet, "PUT");
-      if (epoch !== sessionEpoch || !token) return;
-      walletAliases.remember([saved]);
-      await refreshLoginWallets();
+      const saved: NamedWallet = await api(
+        "/account/login-wallets/alias",
+        wallet,
+        "PUT",
+      );
+      if (epoch === sessionEpoch && token) {
+        walletAliases.remember([saved]);
+        if (isLoginWallet(saved))
+          renderCurrentLoginWallet(loginAddress, saved.alias);
+      }
+      return saved;
     },
-    toast,
   );
 }
 async function signWalletChallenge(path: string) {
@@ -526,15 +553,58 @@ function saveSession(
 }
 const gameName = (gameId: string) =>
   catalogGames.find((g) => g.id === gameId)?.name ?? gameId;
-async function waitOperation(operationId: string) {
+async function waitOperation(operationId: string, announce = true) {
   for (let i = 0; i < 100; i++) {
     const op = await api(`/operations/${operationId}`);
     if (op.status === "FINALIZED") return op;
     if (op.status === "FAILED") throw new Error(op.error ?? "작업 실패");
     await new Promise((r) => setTimeout(r, 1000));
   }
-  toast("작업을 계속 확인하고 있습니다. 활동 내역에서 진행 상태를 확인하세요.");
+  if (announce)
+    toast(
+      "작업을 계속 확인하고 있습니다. 활동 내역에서 진행 상태를 확인하세요.",
+    );
 }
+
+let actionRun: ((feedback: HTMLElement) => Promise<void>) | undefined;
+const actionDialog = $<HTMLDialogElement>("#action-dialog");
+const actionFeedback = $("#action-progress");
+function showAction(
+  title: string,
+  details: string,
+  label: string,
+  run: NonNullable<typeof actionRun>,
+) {
+  actionRun = run;
+  $("#action-title").textContent = title;
+  $("#action-details").innerHTML = details;
+  $("#confirm-action").textContent = label;
+  actionFeedback.textContent = "";
+  actionFeedback.classList.remove("feedback-error");
+  actionDialog.showModal();
+}
+actionDialog.addEventListener("close", () => {
+  if (!actionDialog.open) actionRun = undefined;
+});
+on("#cancel-action", "click", () => actionDialog.close());
+actionDialog.addEventListener("cancel", (e) => {
+  if ($<HTMLButtonElement>("#confirm-action").disabled) e.preventDefault();
+});
+on("#confirm-action", "click", async () => {
+  const cancel = $<HTMLButtonElement>("#cancel-action");
+  cancel.disabled = true;
+  actionFeedback.classList.remove("feedback-error");
+  actionFeedback.textContent = "요청을 준비하고 있습니다…";
+  try {
+    await actionRun?.(actionFeedback);
+    actionDialog.close();
+  } catch (error) {
+    actionFeedback.textContent = walletErrorMessage(error);
+    actionFeedback.classList.add("feedback-error");
+  } finally {
+    cancel.disabled = false;
+  }
+});
 
 async function refreshPlayer() {
   const [balances, activity, catalog, applications] = await Promise.all([
@@ -550,8 +620,13 @@ async function refreshPlayer() {
     (b: any) => b.deploymentId === asset.activeDeploymentId,
   );
   renderPlayerBalance($("#player-balance"), current);
-  if (current?.address)
-    $("#wallet-status").textContent = `${short(current.address)} · 조회 중`;
+  const loginAddress = sessionStorage.getItem("metanomic-login-wallet");
+  $("#balance-wallet-note").textContent = current?.address
+    ? current.address.toLowerCase() === loginAddress?.toLowerCase()
+      ? "이 지갑의 CGC 잔액을 조회하고 있어요."
+      : `포털에서 CGC 잔액을 조회하는 지갑은 ${current.address}입니다.`
+    : "포털에서 조회할 CGC 지갑이 아직 없습니다.";
+  show("#balance-wallet-note", true);
   const rows = [
     ...activity.payments.map((p: any) => ({
       label: `${gameName(p.game_id)} · ${p.payload.item.name} · ${format(p.payload.amount)} CGC`,
@@ -573,15 +648,15 @@ async function refreshPlayer() {
         )
         .join("")
     : '<p class="muted">게임에서 보상을 받거나 공통 코인으로 결제하면 이곳에 표시됩니다.</p>';
-  document
-    .querySelectorAll<HTMLButtonElement>("[data-checkout]")
-    .forEach(
-      (b) =>
-        (b.onclick = () =>
-          void checkout(b.dataset.checkout!).catch((e) =>
-            toast(e.message, true),
-          )),
-    );
+  const waiting = activity.payments.filter((p: any) => p.status === "CREATED");
+  const pending = $("#pending-checkout");
+  const next = waiting[0];
+  const pendingContent = next
+    ? `<div class="section-heading tight"><h2>승인할 결제 ${waiting.length}건</h2></div><p>${esc(gameName(next.game_id))} · ${esc(next.payload.item.name)} · ${esc(format(next.payload.amount))} CGC</p><div class="actions"><button type="button" class="primary" data-checkout="${esc(next.id)}">결제 이어하기</button>${waiting.length > 1 ? '<button type="button" data-goto="activity">전체 주문 보기</button>' : ""}</div>`
+    : "";
+  if (pending.innerHTML !== pendingContent) pending.innerHTML = pendingContent;
+  show("#pending-checkout", !!next);
+  setTabCount("activity", waiting.length);
   document.querySelectorAll<HTMLButtonElement>("[data-refund]").forEach(
     (b) =>
       (b.onclick = () =>
@@ -590,7 +665,6 @@ async function refreshPlayer() {
           .catch((e) => toast(e.message, true))),
   );
   updatePlayerGuide({
-    walletAddress: current?.address,
     games: catalog.games,
     payments: activity.payments,
     rewards: activity.rewards,
@@ -598,14 +672,12 @@ async function refreshPlayer() {
 }
 const PURCHASED = ["PAID", "DELIVERY_CLAIMED", "COMPLETED"];
 function updatePlayerGuide(state: {
-  walletAddress?: string;
   games: any[];
   payments: any[];
   rewards: any[];
 }) {
   const playable = state.games.find((g) => g.playUrl);
   const purchased = state.payments.some((p) => PURCHASED.includes(p.status));
-  const waitingPayment = state.payments.find((p) => p.status === "CREATED");
   const launch = playable
     ? {
         label: `${playable.name} 열기`,
@@ -616,51 +688,43 @@ function updatePlayerGuide(state: {
     {
       title: "게임에서 지갑으로 로그인",
       detail: state.games.length
-        ? "참여 게임을 열고 지갑으로 로그인하세요. 별도 이용자 등록이나 연결 코드는 필요 없습니다."
+        ? "게임을 열고 지갑으로 로그인하세요."
         : "참여 게임이 등록되면 이곳에서 열 수 있습니다.",
       done: state.rewards.length > 0 || state.payments.length > 0,
       action: launch,
     },
     {
       title: "게임에서 CGC 받기",
-      detail:
-        "게임의 보상 조건을 달성하면 로그인한 지갑 주소로 CGC가 지급됩니다.",
-      done: state.rewards.length > 0,
+      detail: "보상 조건을 달성하면 지갑으로 지급됩니다.",
+      done: state.rewards.some((r) => r.operation?.status === "FINALIZED"),
       action: launch,
     },
     {
       title: "CGC로 구매하기",
-      detail: waitingPayment
-        ? "지갑 승인을 기다리는 주문이 있습니다."
-        : "게임에서 CGC 결제를 선택하고 지갑으로 승인하세요.",
+      detail: "게임에서 CGC 결제를 선택하고 지갑으로 승인하세요.",
       done: purchased,
-      action: waitingPayment
-        ? {
-            label: "결제 이어하기",
-            click: `[data-checkout="${waitingPayment.id}"]`,
-          }
-        : launch,
+      action: launch,
     },
   ];
   renderSteps("#player-steps", "#player-steps-progress", steps);
-  setTabCount("play", waitingPayment ? 1 : 0);
 }
 function renderCatalog(games: any[]) {
   const next = JSON.stringify(games);
   if (next === catalogKey) return;
   catalogKey = next;
-  $("#catalog-count").textContent = String(games.length).padStart(2, "0");
+  $("#catalog-count").textContent = `${games.length}개`;
   $("#game-catalog").innerHTML =
     games
       .map((g, index) => {
-        const color = index % 2 ? "b" : "a";
+        const hue = (index * 67 + 160) % 360;
+        const host = g.playUrl ? new URL(g.playUrl).host : "";
         const launch = g.playUrl
-          ? `<a class="primary catalog-launch" href="${esc(g.playUrl)}" target="_blank" rel="noopener noreferrer" data-launch="${esc(g.id)}" aria-label="${esc(g.name)} 게임 실행">게임 실행 ↗</a>`
-          : '<span class="muted">게임 실행 주소 준비 중</span>';
-        return `<article class="game-card game-${color}"><div class="game-art"><div class="planet planet-${color}"></div><div class="${color === "a" ? "art-grid" : "harbor-lines"}"></div><span class="genre">${esc(g.category)}</span><span class="game-monogram" aria-hidden="true">${esc(Array.from(String(g.name))[0] ?? "")}</span></div><div class="game-content"><div class="card-tags"><span class="eyebrow">${esc(g.id)}</span></div><h2>${esc(g.name)}</h2><p>${esc(g.description || "새로운 게임을 만나보세요.")}</p><div class="game-status">${esc(g.playUrl ? new URL(g.playUrl).host : "등록된 게임")}</div><div class="actions">${launch}</div><p class="muted">게임에서 지갑으로 로그인하면 그 주소로 보상을 받습니다.</p></div></article>`;
+          ? `<a class="primary catalog-launch" href="${esc(g.playUrl)}" target="_blank" rel="noopener noreferrer" data-launch="${esc(g.id)}" aria-label="${esc(g.name)} 게임 실행">플레이 ↗</a>`
+          : '<span class="muted">준비 중</span>';
+        return `<article class="game-card" style="--hue:${hue}"><span class="game-tile" aria-hidden="true">${esc(Array.from(String(g.name))[0] ?? "")}</span><div class="game-content"><h2>${esc(g.name)}</h2><span class="game-meta">${esc([g.category, host].filter(Boolean).join(" · "))}</span><p>${esc(g.description || "")}</p></div>${launch}</article>`;
       })
       .join("") ||
-    '<div class="panel empty-state"><h2>아직 참여할 수 있는 게임이 없습니다</h2><p class="muted">게임이 등록되면 이곳에서 바로 실행할 수 있습니다.</p></div>';
+    '<div class="panel empty-state"><p class="muted">아직 등록된 게임이 없습니다.</p></div>';
 }
 function renderOperatorApplication(latest: any) {
   const status = $("#operator-application-status");
@@ -677,18 +741,50 @@ function renderOperatorApplication(latest: any) {
             : `반려됐습니다: ${latest.reviewNote ?? ""} 내용을 보완해 다시 신청할 수 있습니다.`,
       )}</p><small>승인 지갑 ${esc(latest.wallet)}</small>${approved ? '<button type="button" class="primary" data-reload>운영자 화면으로 전환 →</button>' : ""}</div>`;
   $("#operator-application-wallet").textContent = address
-    ? `서명할 지갑 ${short(address)} · 이 지갑이 운영자 승인 지갑이 됩니다.`
-    : "신청할 때 사용할 지갑을 선택합니다. 이 지갑이 운영자 승인 지갑이 됩니다.";
+    ? `서명 지갑 ${short(address)}`
+    : "";
   setTabCount("apply", approved ? 1 : 0);
 }
 async function checkout(paymentId: string) {
-  currentPayment = await api(`/payments/${paymentId}`);
+  const dialog = $<HTMLDialogElement>("#checkout");
+  if (checkoutLoading || dialog.open) return;
+  checkoutLoading = true;
+  try {
+    currentPayment = await api(`/payments/${paymentId}`);
+  } finally {
+    checkoutLoading = false;
+  }
+  if (currentPayment.status !== "CREATED") {
+    toast("결제 상태가 바뀌었습니다. 나의 활동에서 최신 상태를 확인하세요.");
+    await refreshPlayer();
+    return;
+  }
+  $("#checkout-progress").textContent = "";
+  $("#checkout-progress").classList.remove("feedback-error");
   $("#checkout-details").innerHTML =
     `<p>${esc(gameName(currentPayment.gameId))}</p><h2>${esc(currentPayment.item.name)}</h2><div class="activity-row"><span>수량 ${esc(currentPayment.item.quantity)}</span><strong>${esc(format(currentPayment.amount))} CGC</strong></div>`;
   $("#authorize-payment").textContent =
     `${format(currentPayment.amount)} CGC 결제 승인`;
-  ($("#checkout") as HTMLDialogElement).showModal();
+  dialog.showModal();
 }
+function selectOperatorGame(gameId: string) {
+  const picker = $<HTMLSelectElement>("#operator-game-select");
+  picker.value = gameId;
+  if (picker.selectedIndex < 0 && picker.options.length)
+    picker.selectedIndex = 0;
+  selectedOperatorGameId = picker.value;
+  for (const card of document.querySelectorAll<HTMLElement>(
+    "[data-operator-game], [data-integration-game]",
+  )) {
+    card.hidden =
+      (card.dataset.operatorGame ?? card.dataset.integrationGame) !==
+      selectedOperatorGameId;
+  }
+}
+on("#operator-game-select", "change", (event) => {
+  selectOperatorGame((event.target as HTMLSelectElement).value);
+});
+
 async function refreshOperator() {
   const [owned, submitted] = await Promise.all([
     api("/operator/games"),
@@ -726,7 +822,7 @@ async function refreshOperator() {
               : r.status === "REGISTERING"
                 ? "계약 등록이 확정되면 이용자에게 공개됩니다."
                 : r.status === "APPROVED"
-                  ? "승인됐습니다. 내 게임 운영에서 관리하세요."
+                  ? "승인됐습니다. [내 게임]에서 관리하세요."
                   : r.status === "REJECTED"
                     ? "내용을 보완해 [다시 신청]하세요. 같은 게임 ID로 신청됩니다."
                     : "관리자가 계약 등록을 다시 시도합니다.",
@@ -751,12 +847,14 @@ async function refreshOperator() {
   budgetsRequest.catch(() => {});
   const views = await Promise.all(
     games.map(async (game: any) => {
-      const [actions, payments, rewards, credentials] = await Promise.all([
-        api(`/games/${game.id}/budget-actions`),
-        api(`/games/${game.id}/payments`),
-        api(`/games/${game.id}/rewards`),
-        api(`/games/${game.id}/credentials`),
-      ]);
+      const [actions, payments, rewards, credentials, webhooks] =
+        await Promise.all([
+          api(`/games/${game.id}/budget-actions`),
+          api(`/games/${game.id}/payments`),
+          api(`/games/${game.id}/rewards`),
+          api(`/games/${game.id}/credentials`),
+          api(`/games/${game.id}/webhooks`),
+        ]);
       return {
         game,
         budget: undefined as any,
@@ -764,6 +862,7 @@ async function refreshOperator() {
         payments: payments.payments,
         rewards: rewards.rewards,
         credentials: credentials.credentials,
+        webhooks: webhooks.webhooks,
       };
     }),
   );
@@ -772,7 +871,7 @@ async function refreshOperator() {
     views
       .map(({ game, actions, payments, rewards, credentials }) => {
         const liveCredentials = credentials.filter((c: any) => !c.revoked);
-        return `<article class="panel operator-game"><header class="operator-game-head"><div><span class="eyebrow">${esc(game.id)}</span><h2>${esc(game.name)}</h2></div>${pill(game.active ? "ACTIVE" : "INACTIVE")}</header><div class="mini-stats"><div><strong class="loading" data-budget-available="${esc(game.id)}">확인 중</strong><span>사용 가능 예산 CGC</span></div><div><strong class="loading" data-budget-reserved="${esc(game.id)}">확인 중</strong><span>지급·인출 대기</span></div><div><strong class="${payments.length ? "warn" : ""}">${payments.length}</strong><span>미완료 결제</span></div></div><div class="operator-game-body"><section class="op-block"><h3><span class="op-num">1</span>보상 예산</h3><p class="muted">이용자 보상은 이 예산에서 지급됩니다. 예치·인출은 승인 지갑으로 서명합니다.</p><form class="operator-form" data-budget-form="${esc(game.id)}"><label>금액 (CGC)<input name="amount" value="1.000000" required></label><label>작업<select name="kind"><option value="deposits">추가 예치</option><option value="withdrawals">예산 인출</option></select></label><button type="submit" class="primary">지갑으로 승인</button></form></section><section class="op-block"><h3><span class="op-num">2</span>게임 서버 연결</h3><p class="muted">API 주소·게임 ID·API 키를 한곳에서 확인하고 게임 서버에 설정합니다.</p><p>${liveCredentials.length ? `<span class="pill" data-credential-count="${esc(game.id)}">발급된 키 ${liveCredentials.length}개</span>` : `<span class="pill pending" data-credential-count="${esc(game.id)}">키 미발급</span>`}</p><button type="button" class="primary" data-goto="integration">연결 정보와 API 키 보기 →</button></section><section class="op-block"><h3><span class="op-num">3</span>정산 속도</h3><p class="muted">보상·결제를 몇 블록 확인한 뒤 완료로 볼지 정합니다. 1은 블록에 포함되는 즉시이며 빠르지만, 체인 재구성이 일어나면 이미 반영한 결과가 사라질 수 있습니다. 비우면 서버 기본값(L1 최종 확정 또는 서버 설정)을 따릅니다.</p><form class="operator-form" data-settlement-form="${esc(game.id)}"><label>확인 블록 수<input name="confirmations" type="number" min="1" max="1000" step="1" placeholder="서버 기본값" value="${game.confirmations ?? ""}"></label><button type="submit" class="primary">저장</button></form></section></div><details class="op-history"${payments.length ? " open" : ""}><summary>최근 내역 · 미완료 결제 ${payments.length}건</summary><div class="op-history-grid"><div><h3>미완료 결제</h3>${payments.map((p: any) => `<div class="activity-row"><div><strong>${esc(p.item.name)}</strong><small>${esc(p.paymentId)}</small></div>${pill(p.status)}</div>`).join("") || '<p class="muted">미완료 결제가 없습니다.</p>'}</div><div><h3>보상 지급 결과</h3>${
+        return `<article class="panel operator-game" data-operator-game="${esc(game.id)}"><header class="operator-game-head"><div><span class="eyebrow">${esc(game.id)}</span><h2>${esc(game.name)}</h2></div>${pill(game.active ? "ACTIVE" : "INACTIVE")}</header><div class="mini-stats"><div><strong class="loading" data-budget-available="${esc(game.id)}">확인 중</strong><span>사용 가능 예산</span></div><div><strong class="loading" data-budget-reserved="${esc(game.id)}">확인 중</strong><span>지급·인출 대기</span></div><div><strong class="${payments.length ? "warn" : ""}">${payments.length}</strong><span>미완료 결제</span></div></div><div class="operator-game-body"><section class="op-block"><h3>보상 예산</h3><form class="operator-form" data-budget-form="${esc(game.id)}"><label>금액 (CGC)<input name="amount" inputmode="decimal" placeholder="0.000000" maxlength="85" required></label><label>작업<select name="kind"><option value="deposits">추가 예치</option><option value="withdrawals">예산 인출</option></select></label><button type="submit" class="primary" data-budget-preview>예치 내용 확인</button></form><p class="operation-feedback muted" data-budget-feedback role="status"></p></section><section class="op-block"><h3>게임 서버 연결</h3><p>${liveCredentials.length ? `<span class="pill" data-credential-count="${esc(game.id)}">발급된 키 ${liveCredentials.length}개</span>` : `<span class="pill pending" data-credential-count="${esc(game.id)}">키 미발급</span>`}</p><button type="button" data-goto="integration" data-operator-game-target="${esc(game.id)}">연결 정보와 API 키 보기 →</button></section><section class="op-block"><h3>정산 속도</h3><p class="muted">완료로 볼 확인 블록 수. 작을수록 빠르지만 체인 재구성에 취약합니다.</p><form class="operator-form" data-settlement-form="${esc(game.id)}"><label>확인 블록 수<input name="confirmations" type="number" min="1" max="1000" step="1" placeholder="서버 기본값" value="${game.confirmations ?? ""}"></label><button type="submit">저장</button></form></section></div><details class="op-history"${payments.length ? " open" : ""}><summary>최근 내역 · 미완료 결제 ${payments.length}건</summary><div class="op-history-grid"><div><h3>미완료 결제</h3>${payments.map((p: any) => `<div class="activity-row"><div><strong>${esc(p.item.name)}</strong><small>${esc(p.paymentId)}</small></div>${pill(p.status)}</div>`).join("") || '<p class="muted">미완료 결제가 없습니다.</p>'}</div><div><h3>보상 지급 결과</h3>${
           rewards
             .slice(0, 5)
             .map(
@@ -782,16 +881,17 @@ async function refreshOperator() {
             .join("") || '<p class="muted">아직 보상이 없습니다.</p>'
         }</div><div><h3>예치·인출</h3>${
           actions
+            .filter((action: any) => action.status !== "CREATED")
             .slice(0, 5)
             .map(
               (a: any) =>
-                `<div class="activity-row"><span>${a.kind === "deposits" ? "예치" : "인출"} ${format(a.payload.amount)} CGC</span>${pill(a.status)}</div>`,
+                `<div class="activity-row"><span>${a.kind === "deposits" ? "예치" : "인출"} ${format(a.payload.amount)} CGC</span>${pill(a.status, a.status === "PROCESSING" ? "블록체인 확정 대기" : undefined)}</div>`,
             )
             .join("") || '<p class="muted">아직 내역이 없습니다.</p>'
         }</div></div></details></article>`;
       })
       .join("") ||
-    '<div class="panel empty-state"><h2>아직 운영 중인 게임이 없습니다</h2><p class="muted">게임 등록을 신청하고 관리자 승인이 끝나면 이곳에서 예산과 API 연동을 관리할 수 있습니다.</p><button type="button" class="primary" data-goto="register">게임 등록 신청하기 →</button></div>';
+    '<div class="panel empty-state"><h2>아직 운영 중인 게임이 없습니다</h2><p class="muted">게임이 승인되면 여기서 예산과 연동을 관리합니다.</p><button type="button" class="primary" data-goto="register">게임 등록 신청하기 →</button></div>';
   renderOperatorIntegration($("#operator-integration"), views, {
     apiUrl: new URL("/v1", location.origin).href,
     assetId: asset.assetId,
@@ -827,6 +927,13 @@ async function refreshOperator() {
       toast("API 키를 폐기했습니다.");
       await refreshOperator();
     },
+    createWebhook: (gameId, url, label) =>
+      api(`/games/${gameId}/webhooks`, { url, label }),
+    testWebhook: (gameId, webhookId) =>
+      api(`/games/${gameId}/webhooks/${webhookId}/tests`, {}),
+    deleteWebhook: async (gameId, webhookId) => {
+      await api(`/games/${gameId}/webhooks/${webhookId}`, undefined, "DELETE");
+    },
     feedback: toast,
   });
   document.querySelectorAll<HTMLFormElement>("[data-settlement-form]").forEach(
@@ -850,13 +957,28 @@ async function refreshOperator() {
           .catch((error) => toast(error.message, true));
       }),
   );
-  document.querySelectorAll<HTMLFormElement>("[data-budget-form]").forEach(
-    (form) =>
-      (form.onsubmit = (e) => {
-        e.preventDefault();
-        void budgetAction(form).catch((e) => toast(e.message, true));
-      }),
+  const picker = $<HTMLSelectElement>("#operator-game-select");
+  picker.replaceChildren(
+    ...views.map(({ game }) => new Option(game.name, game.id)),
   );
+  selectOperatorGame(selectedOperatorGameId);
+  show("#operator-game-picker", views.length > 0);
+  for (const { game, actions } of views) {
+    const form = $<HTMLFormElement>(
+      `[data-budget-form="${CSS.escape(game.id)}"]`,
+    );
+    form.onchange = () => {
+      form.querySelector<HTMLElement>("[data-budget-preview]")!.textContent =
+        new FormData(form).get("kind") === "deposits"
+          ? "예치 내용 확인"
+          : "인출 내용 확인";
+    };
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      previewBudget(form, game);
+    };
+    renderBudgetFeedback(game.id, actions);
+  }
   const fillBudgets = (text: (gameId: string, key: string) => string) =>
     document
       .querySelectorAll<HTMLElement>(
@@ -903,7 +1025,7 @@ function renderOperatorOverview(registrations: any[], views: any[]) {
       title: "게임 등록 신청",
       detail: needsFix.length
         ? `반려·실패한 신청 ${needsFix.length}건이 있습니다. 내용을 보완해 다시 신청하세요.`
-        : "게임 ID·이름·실행 주소·소개를 입력해 신청합니다.",
+        : "이름·실행 주소·소개를 입력하세요.",
       done: (registrations.length > 0 || views.length > 0) && !needsFix.length,
       action: { label: "등록 신청서 작성", goto: "register" },
     },
@@ -919,14 +1041,14 @@ function renderOperatorOverview(registrations: any[], views: any[]) {
     },
     {
       title: "게임 서버 연결 정보 확인",
-      detail:
-        "게임 서버 연결 메뉴에서 API 주소·게임 ID를 복사하고 API 키를 발급받으세요.",
+      detail: "API 주소·게임 ID를 복사하고 API 키를 발급하세요.",
       done: hasCredential,
       action: first
         ? {
             label: "연결 정보 보기",
             goto: "integration",
-            click: `[data-credential="${first.game.id}"]`,
+            gameId: first.game.id,
+            focus: `[data-integration-game="${CSS.escape(first.game.id)}"] h2`,
           }
         : undefined,
     },
@@ -939,6 +1061,7 @@ function renderOperatorOverview(registrations: any[], views: any[]) {
       action: first
         ? {
             label: "예치 금액 입력",
+            gameId: first.game.id,
             focus: `[data-budget-form="${first.game.id}"] input[name=amount]`,
           }
         : undefined,
@@ -972,29 +1095,136 @@ function renderOperatorOverview(registrations: any[], views: any[]) {
   );
   setTabCount("games", openPayments);
 }
-async function budgetAction(form: HTMLFormElement) {
-  const data = Object.fromEntries(new FormData(form)),
-    gameId = form.dataset.budgetForm!,
-    kind = String(data.kind);
+const budgetProgress = new Map<
+  string,
+  { actionId: string; message: string; error?: boolean }
+>();
+function renderBudgetFeedback(gameId: string, actions?: any[]) {
+  const field = document.querySelector<HTMLElement>(
+    `[data-budget-form="${CSS.escape(gameId)}"] + [data-budget-feedback]`,
+  );
+  if (!field) return;
+  const progress = budgetProgress.get(gameId);
+  const recorded = actions?.find(
+    (action) =>
+      action.status !== "CREATED" &&
+      (!progress || action.id === progress.actionId),
+  );
+  if (
+    recorded &&
+    (!progress || ["FINALIZED", "FAILED"].includes(recorded.status))
+  ) {
+    const label = recorded.kind === "deposits" ? "예치" : "인출";
+    const status =
+      recorded.status === "PROCESSING"
+        ? "블록체인 확정 대기"
+        : (words[recorded.status] ?? recorded.status);
+    field.textContent = `최근 ${format(recorded.payload.amount)} CGC ${label} · ${status}`;
+    field.classList.toggle("feedback-error", recorded.status === "FAILED");
+    return;
+  }
+  field.textContent = progress?.message ?? "";
+  field.classList.toggle("feedback-error", !!progress?.error);
+}
+
+function previewBudget(
+  form: HTMLFormElement,
+  game: { id: string; name: string },
+) {
+  const data = new FormData(form);
+  const amount = String(data.get("amount")).trim();
+  const input = form.elements.namedItem("amount") as HTMLInputElement;
+  if (!/^(0|[1-9][0-9]*)(\.[0-9]{1,6})?$/.test(amount) || Number(amount) <= 0) {
+    const error = "0보다 큰 수량을 입력하세요. 소수점 아래는 최대 6자리입니다.";
+    const field = form.nextElementSibling as HTMLElement;
+    field.textContent = error;
+    field.classList.add("feedback-error");
+    input.focus();
+    return;
+  }
+  const field = form.nextElementSibling as HTMLElement;
+  if (field.classList.contains("feedback-error")) renderBudgetFeedback(game.id);
+  const kind = String(data.get("kind"));
+  const deposit = kind === "deposits";
+  const label = deposit ? "예치" : "인출";
+  const wallet = `승인 지갑${me.wallet ? ` · ${short(me.wallet)}` : ""}`;
+  const budget = `${game.name}의 보상 예산`;
+  showAction(
+    `${label} 내용을 확인하세요`,
+    detailList([
+      ["게임", esc(game.name)],
+      ["금액", `${esc(amount)} CGC`],
+      ["보내는 곳", esc(deposit ? wallet : budget)],
+      ["받는 곳", esc(deposit ? budget : wallet)],
+      [
+        "지갑 서명",
+        deposit ? "예치 승인과 CGC 사용 승인, 총 2회" : "인출 승인 1회",
+      ],
+    ]),
+    `${label} 서명 시작`,
+    (feedback) => budgetAction(game.id, kind, amount, label, feedback),
+  );
+}
+
+async function budgetAction(
+  gameId: string,
+  kind: string,
+  amount: string,
+  label: string,
+  feedback: HTMLElement,
+) {
+  const epoch = sessionEpoch;
+  feedback.textContent = "운영자 승인 지갑을 확인하고 있습니다…";
+  if (!localAccount) await signingProvider();
+  if (me.wallet && address?.toLowerCase() !== me.wallet.toLowerCase())
+    throw new Error(
+      "현재 지갑이 운영자 승인 지갑과 다릅니다. [지갑] 메뉴에서 예치·인출 승인 지갑을 연결하세요.",
+    );
   const prepared = await api(`/games/${gameId}/${kind}`, {
     assetId: asset.assetId,
-    amount: data.amount,
+    amount,
   });
+  feedback.textContent =
+    kind === "deposits"
+      ? "1/2 지갑 앱에서 예치 승인에 서명하세요."
+      : "지갑 앱에서 인출 승인에 서명하세요.";
   const signature = await signTyped(prepared.signingRequest);
   let permitSignature, permitDeadline;
   if (kind === "deposits") {
     const list = await api(`/games/${gameId}/budget-actions`);
     const action = list.actions.find((a: any) => a.id === prepared.actionId);
+    if (!action?.permit)
+      throw new Error("CGC 사용 승인을 준비하지 못했습니다. 다시 시도하세요.");
+    feedback.textContent = "2/2 지갑 앱에서 CGC 사용 승인에 서명하세요.";
     permitSignature = await signTyped(action.permit);
     permitDeadline = action.expires_at;
   }
+  feedback.textContent = `${label} 요청을 제출하고 있습니다…`;
   const result = await api(
     `/games/${gameId}/${kind}/${prepared.actionId}/authorizations`,
     { signature, permitSignature, permitDeadline },
   );
-  toast("예산 변경을 접수했습니다.");
-  await waitOperation(result.operationId);
-  await refreshOperator();
+  if (epoch !== sessionEpoch) return;
+  const progress = {
+    actionId: prepared.actionId,
+    message: `${amount} CGC ${label} 접수 · 블록체인 확정 대기`,
+    error: false,
+  };
+  budgetProgress.set(gameId, progress);
+  renderBudgetFeedback(gameId);
+  void waitOperation(result.operationId, false)
+    .then((operation) => {
+      progress.message = operation
+        ? `${amount} CGC ${label} 완료 · 새로고침으로 변경된 예산을 확인하세요.`
+        : `${amount} CGC ${label} 확정 대기 · 새로고침으로 예치·인출 내역을 확인하세요.`;
+    })
+    .catch((error) => {
+      progress.message = `예치·인출 내역에서 ${label} 상태를 확인하세요. ${walletErrorMessage(error)}`;
+      progress.error = true;
+    })
+    .finally(() => {
+      if (budgetProgress.get(gameId) === progress) renderBudgetFeedback(gameId);
+    });
 }
 // Same top-up threshold as scripts/fund-relayer.ts.
 const RELAYER_GAS_LOW_WEI = parseEther("0.5");
@@ -1024,13 +1254,13 @@ function gasRow(wallet: GasWallet, local: boolean, extra = "") {
   const address = esc(wallet.address);
   const explorer = local
     ? ""
-    : `<a class="text-link" href="${EXPLORER_URL}/address/${address}" target="_blank" rel="noopener noreferrer">거래 내역 보기 ↗</a>`;
+    : `<a class="text-link" href="${EXPLORER_URL}/address/${address}" target="_blank" rel="noopener noreferrer">탐색기 ↗</a>`;
   const faucet = local
     ? ""
-    : `<a class="${low ? "primary" : ""} button-link" href="${FAUCET_URL}" target="_blank" rel="noopener noreferrer" data-copy="${address}">주소 복사하고 Faucet 열기 ↗</a>`;
+    : `<a class="${low ? "primary" : ""} button-link" href="${FAUCET_URL}" target="_blank" rel="noopener noreferrer" data-copy="${address}" title="주소를 복사하고 Faucet(하루 1회 5 RON)을 엽니다">Faucet ↗</a>`;
   return {
     low,
-    html: `<article class="panel gas-panel${low ? " low" : ""}"><div class="gas-balance"><span>${esc(wallet.label)} 잔액</span><strong>${ron} RON</strong><small>${low ? esc(wallet.lowNote) : esc(wallet.hint(balance))}</small></div><div class="gas-address"><span>${esc(wallet.label)} 주소</span><code>${address}</code><div class="actions"><button type="button" class="quiet" data-copy="${address}">주소 복사</button>${explorer}</div></div><div class="gas-actions"><p class="muted">Faucet에서 위 주소를 붙여넣고 CAPTCHA를 풀면 하루 1회 5 RON을 받습니다.</p><div class="actions">${extra}${faucet}</div></div></article>`,
+    html: `<article class="panel gas-panel${low ? " low" : ""}"><div class="gas-balance"><span>${esc(wallet.label)}</span><strong>${ron} RON</strong><small>${low ? esc(wallet.lowNote) : esc(wallet.hint(balance))}</small></div><div class="gas-address"><code title="${address}">${esc(short(wallet.address))}</code><button type="button" class="quiet small" data-copy="${address}">주소 복사</button>${explorer}</div><div class="gas-actions actions">${extra}${faucet}</div></article>`,
   };
 }
 const ron = (wei: string | bigint) =>
@@ -1045,12 +1275,12 @@ function renderRelayerGas(deployment: any, accounting: any, funding: any) {
       address: deployment.relayer,
       balanceWei: accounting.relayerGasWei,
       lowWei: RELAYER_GAS_LOW_WEI,
-      lowNote: "0.5 RON 미만입니다. 바닥나면 보상·결제 거래가 멈춥니다.",
+      lowNote: "0.5 RON 미만 · 바닥나면 보상·결제가 멈춥니다",
       hint: (b) =>
-        `보상 약 ${(b / REWARD_GAS_WEI).toLocaleString("ko-KR")}건 또는 구매 약 ${(b / PURCHASE_GAS_WEI).toLocaleString("ko-KR")}건 분량 (추정)`,
+        `보상 약 ${(b / REWARD_GAS_WEI).toLocaleString("ko-KR")}건 · 구매 약 ${(b / PURCHASE_GAS_WEI).toLocaleString("ko-KR")}건 분량`,
     },
     local,
-    '<button type="button" data-fund-relayer>관리자 지갑에서 충전</button>',
+    '<button type="button" class="small" data-fund-relayer>관리자 지갑에서 충전</button>',
   );
   const admin = gasRow(
     {
@@ -1058,14 +1288,14 @@ function renderRelayerGas(deployment: any, accounting: any, funding: any) {
       address: deployment.admin,
       balanceWei: accounting.adminGasWei,
       lowWei: ADMIN_GAS_LOW_WEI,
-      lowNote: "0.1 RON 미만입니다. 바닥나면 예산 배분·발행이 멈춥니다.",
-      hint: () => "예산 배분·게임 등록·CGC 발행 거래에 사용합니다.",
+      lowNote: "0.1 RON 미만 · 바닥나면 배분·발행이 멈춥니다",
+      hint: () => "배분·게임 등록·발행용",
     },
     local,
   );
   const auto = funding.auto
-    ? `자동 충전 켜짐: 중계 지갑이 ${ron(funding.auto.minWei)} RON 미만이면 관리자 지갑에서 ${ron(funding.auto.topupWei)} RON을 보냅니다. 관리자 지갑에는 ${ron(funding.auto.adminMinWei)} RON을 남깁니다.`
-    : "자동 충전 꺼짐 (RELAYER_AUTO_FUND=0). 필요하면 [관리자 지갑에서 충전]으로 보내세요.";
+    ? `자동 충전 켜짐 · 중계 지갑 ${ron(funding.auto.minWei)} RON 미만이면 ${ron(funding.auto.topupWei)} RON 충전 (관리자 지갑 ${ron(funding.auto.adminMinWei)} RON 유지)`
+    : "자동 충전 꺼짐 (RELAYER_AUTO_FUND=0)";
   const recent = funding.recent
     .slice(0, 5)
     .map(
@@ -1086,19 +1316,26 @@ const ISSUANCE_STEPS_TOTAL: Record<string, string> = {
 };
 function renderIssuance(data: any) {
   const a = data.accounting;
-  const supply = Number(a.totalSupply),
-    cap = Number(a.supplyCap);
-  const percent = cap ? Math.min(100, (supply / cap) * 100) : 0;
-  $("#supply-meter").innerHTML =
-    `<div class="supply-numbers"><span>총발행량 <strong>${format(a.totalSupply)}</strong> / 한도 ${format(a.supplyCap)} CGC</span><span>추가 발행 가능 <strong>${format(String(cap - supply))}</strong> CGC</span></div><div class="supply-bar" role="meter" aria-valuemin="0" aria-valuemax="${cap}" aria-valuenow="${supply}" aria-label="발행 한도 사용률"><span style="width:${percent.toFixed(2)}%"></span></div>`;
+  const supply = cgcUnits(a.totalSupply);
+  const cap = cgcUnits(a.supplyCap);
+  $("#supply-remaining").textContent =
+    supply !== undefined && cap !== undefined
+      ? cgcLabel(cap > supply ? cap - supply : 0n)
+      : "—";
+  $("#supply-totals").textContent =
+    supply !== undefined && cap !== undefined
+      ? `발행량 ${cgcLabel(supply)} / 한도 ${cgcLabel(cap)} CGC`
+      : "";
   const operators = data.accounts.filter((o: any) => o.wallet);
   const select = $<HTMLSelectElement>("#issuance-operator");
-  const options = operators
-    .map(
-      (o: any) =>
-        `<option value="${esc(o.id)}">${esc(o.username)} · ${esc(short(o.wallet))}</option>`,
-    )
-    .join("");
+  const options =
+    `<option value="">${operators.length ? "운영자 선택" : "지갑이 등록된 운영자 없음"}</option>` +
+    operators
+      .map(
+        (o: any) =>
+          `<option value="${esc(o.id)}">${esc(o.username)} · ${esc(short(o.wallet))}</option>`,
+      )
+      .join("");
   if (select.innerHTML !== options) {
     const value = select.value;
     select.innerHTML = options;
@@ -1115,6 +1352,37 @@ function renderIssuance(data: any) {
           `<div class="activity-row"><div><strong>${i.target === "reserve" ? "보유분 충전" : `운영자 지갑 · ${esc(operatorName(i.recipient))}`} · +${esc(format(i.amount))} CGC</strong><small>${esc(i.error ?? `${ISSUANCE_STEPS_TOTAL[i.status] ?? ""} ${new Date(i.createdAt).toLocaleString("ko-KR")}`)}</small></div>${pill(i.status)}</div>`,
       )
       .join("") || '<p class="muted">아직 추가 발행 기록이 없습니다.</p>';
+  $("#issuance-count").textContent = data.issuances.length
+    ? `최근 ${data.issuances.length}건`
+    : "";
+  renderIssuanceFeedback();
+}
+
+function renderIssuanceFeedback() {
+  const form = $<HTMLFormElement>("#issuance-form");
+  const target = $<HTMLSelectElement>("#issuance-target").value;
+  const operator = $<HTMLSelectElement>("#issuance-operator");
+  const forOperator = target === "operator";
+  operator.required = forOperator;
+  $("#issuance-operator-label").hidden = !forOperator;
+  const text = String(new FormData(form).get("amount") ?? "").trim();
+  const value = cgcUnits(text);
+  const accounting = latestOverview?.accounting;
+  const supply = cgcUnits(accounting?.totalSupply ?? "");
+  const cap = cgcUnits(accounting?.supplyCap ?? "");
+  const ready = supply !== undefined && cap !== undefined;
+  const error =
+    ready && value && value + supply > cap
+      ? "발행 한도까지 남은 수량을 넘었어요. 수량을 줄이세요."
+      : text && !value
+        ? "0보다 큰 수량을 입력하세요. 소수점 아래는 6자리까지 입력할 수 있어요."
+        : forOperator && operator.options.length <= 1
+          ? "지갑이 등록된 운영자가 없습니다."
+          : "";
+  const feedback = $("#issuance-feedback");
+  feedback.textContent = error;
+  feedback.classList.toggle("feedback-error", !!error);
+  $<HTMLButtonElement>("#issuance-submit").disabled = !ready || !!error;
 }
 const day = (ms: number) =>
   ms ? new Date(ms).toLocaleDateString("ko-KR") : "—";
@@ -1295,32 +1563,109 @@ function renderAdminGames(data: any) {
         (r: any) => r.gameId === g.id && r.status !== "APPROVED",
       );
       if (pending) return pill(pending.status);
-      const toggle = `<button type="button" class="small" data-game-toggle="${esc(g.id)}" data-active="${g.active ? "1" : "0"}"${!g.active && !g.chainActive ? ' disabled title="계약에서 중지된 게임입니다. [체인 재개]가 확정된 뒤 켤 수 있습니다."' : ""}>${g.active ? "끄기" : "켜기"}</button>`;
+      const blocked = !g.active && (!g.chainActive || g.chainPending);
+      const toggle = `<button type="button" class="small" data-game-toggle="${esc(g.id)}" data-name="${esc(g.name)}" data-active="${g.active ? "1" : "0"}"${blocked ? " disabled" : ""}>${g.active ? "포털에서 끄기" : "포털에서 켜기"}</button>`;
       const chain = g.chainPending
         ? ""
-        : `<button type="button" class="small quiet" data-chain-state="${esc(g.id)}" data-active="${g.chainActive ? "0" : "1"}" data-name="${esc(g.name)}">${g.chainActive ? "체인 중지" : "체인 재개"}</button>`;
+        : `<button type="button" class="small quiet" data-chain-state="${esc(g.id)}" data-active="${g.chainActive ? "0" : "1"}" data-name="${esc(g.name)}">${g.chainActive ? "블록체인에서 중지" : "블록체인에서 재개"}</button>`;
       const remove = g.active
         ? ""
         : `<button type="button" class="small danger" data-game-delete="${esc(g.id)}" data-name="${esc(g.name)}">삭제</button>`;
-      return toggle + chain + remove;
+      const hint = blocked
+        ? `<small>${g.chainPending ? "블록체인 작업 확정 후 포털을 켤 수 있습니다." : "블록체인에서 재개한 뒤 포털을 켤 수 있습니다."}</small>`
+        : "";
+      return toggle + chain + remove + hint;
     },
     empty: "등록된 게임이 없습니다.",
   });
 }
 const PAGE_SIZE = 10;
-function renderOperations(data: any) {
+const FAILED_OPERATIONS = "실패";
+const ATTENTION_PAYMENTS = "확인 필요";
+function activePayments(data: any, now = Date.now()) {
+  const trackedOperations = new Map<string, any>();
+  for (const op of data.operations) {
+    if (["pay", "claimDelivery"].includes(op.kind))
+      trackedOperations.set(`${op.kind}:${op.resource_id}`, op);
+  }
+  // Saigon can take tens of minutes to finalize a payment or delivery claim.
+  const reviewAfterMinutes = data.deployment.finality === "local" ? 15 : 60;
+  return data.payments
+    .filter((p: any) =>
+      ["PAID", "DELIVERY_CLAIMED", "PROCESSING"].includes(p.status),
+    )
+    .map((p: any) => {
+      if (p.status === "PAID") {
+        const deadline = Number(p.claim_by) * 1000;
+        const attention = deadline > 0 && deadline <= now;
+        const progress =
+          deadline > 0
+            ? `지급 시작 기한 ${when(deadline)}`
+            : "게임에서 아이템 지급을 준비하고 있습니다.";
+        return {
+          ...p,
+          attention,
+          progress,
+          next: attention
+            ? "게임 서버의 지급 시작 또는 환불 상태를 확인하세요."
+            : "",
+        };
+      }
+      const delivery = p.status === "DELIVERY_CLAIMED";
+      const op = trackedOperations.get(
+        `${delivery ? "claimDelivery" : "pay"}:${p.id}`,
+      );
+      const submitted = op?.created_at;
+      const elapsed = submitted
+        ? Math.max(0, Math.floor((now - submitted) / 60_000))
+        : undefined;
+      const attention = elapsed !== undefined && elapsed >= reviewAfterMinutes;
+      return {
+        ...p,
+        attention,
+        progress:
+          elapsed === undefined
+            ? delivery
+              ? "아이템 지급 완료 대기"
+              : "블록체인에서 결제 확인 중"
+            : `${delivery ? "지급 시작 요청" : "결제 요청"} 후 ${elapsed}분`,
+        next: attention
+          ? delivery
+            ? "게임 서버에서 아이템 지급 결과를 확인하세요."
+            : "관련 작업에서 결제 거래 상태를 확인하세요."
+          : "",
+      };
+    });
+}
+function renderOperations(
+  data: any,
+  payments: ReturnType<typeof activePayments>,
+) {
   const running = (o: any) => !["FINALIZED", "FAILED"].includes(o.status);
+  const gameNames = new Map<string, string>(
+    data.games.map((game: { id: string; name: string }) => [
+      game.id,
+      game.name,
+    ]),
+  );
+  const gameCell = (id: string | null) => {
+    if (!id) return "네트워크";
+    const name = gameNames.get(id);
+    return name
+      ? `<strong>${esc(name)}</strong><small>${esc(id)}</small>`
+      : esc(id);
+  };
   renderTable<any>($("#operations"), {
     rows: data.operations,
     key: (o) => o.id,
     pageSize: PAGE_SIZE,
-    searchPlaceholder: "작업·게임·오류 검색",
+    searchPlaceholder: "작업·게임·결제 ID·오류 검색",
     searchText: (o) =>
-      `${o.kind} ${OPERATION_LABELS[o.kind] ?? ""} ${o.game_id ?? ""} ${o.error ?? ""} ${o.id}`,
+      `${o.kind} ${OPERATION_LABELS[o.kind] ?? ""} ${o.game_id ?? ""} ${gameNames.get(o.game_id) ?? ""} ${o.error ?? ""} ${o.id} ${o.resource_id}`,
     filters: [
       { label: "전체", match: () => true },
       { label: "진행 중", match: running },
-      { label: "실패", match: byStatus("FAILED") },
+      { label: FAILED_OPERATIONS, match: byStatus("FAILED") },
       { label: "완료", match: byStatus("FINALIZED") },
     ],
     columns: [
@@ -1330,7 +1675,7 @@ function renderOperations(data: any) {
         cell: (o) =>
           `<strong>${esc(OPERATION_LABELS[o.kind] ?? o.kind)}</strong>`,
       },
-      { label: "게임", cell: (o) => esc(o.game_id ?? "네트워크") },
+      { label: "게임", cell: (o) => gameCell(o.game_id) },
       {
         label: "상태",
         // An allocation in a block is already spendable; finality only follows.
@@ -1346,6 +1691,8 @@ function renderOperations(data: any) {
         ["작업 ID", `<code>${esc(o.id)}</code>`],
         ["대상", `<code>${esc(o.resource_id)}</code>`],
       ]),
+    detailLabel: (o) =>
+      o.status === "FAILED" ? "오류 상세 보기" : "상세 보기",
     actions: (o) =>
       ["SUBMITTED", "RECONCILING", "PREPARED"].includes(o.status)
         ? `<button type="button" class="small" data-replace="${esc(o.id)}">수수료 대체</button>`
@@ -1353,19 +1700,28 @@ function renderOperations(data: any) {
     empty: "아직 작업이 없습니다.",
   });
   renderTable<any>($("#stalled-payments"), {
-    rows: data.payments.filter((p: any) =>
-      ["PAID", "DELIVERY_CLAIMED", "PROCESSING"].includes(p.status),
-    ),
+    rows: payments,
     key: (p) => p.id,
     searchPlaceholder: "게임·결제 ID 검색",
-    searchText: (p) => `${p.game_id} ${p.id}`,
+    searchText: (p) => `${p.game_id} ${gameNames.get(p.game_id) ?? ""} ${p.id}`,
+    filters: [
+      { label: "전체", match: () => true },
+      { label: ATTENTION_PAYMENTS, match: (p) => p.attention },
+      { label: "처리 중", match: (p) => !p.attention },
+    ],
     columns: [
       { label: "생성", cell: (p) => when(p.created_at), className: "nowrap" },
-      { label: "게임", cell: (p) => esc(p.game_id) },
+      { label: "게임", cell: (p) => gameCell(p.game_id) },
       { label: "결제 ID", cell: (p) => `<code>${esc(p.id)}</code>` },
-      { label: "상태", cell: (p) => pill(p.status) },
+      {
+        label: "상태",
+        cell: (p) =>
+          `${pill(p.status)}${p.attention ? pill("FAILED", ATTENTION_PAYMENTS) : ""}<small>${esc(p.progress)}</small>${p.next ? `<small>${esc(p.next)}</small>` : ""}`,
+      },
     ],
-    empty: "지연된 결제가 없습니다.",
+    actions: (p) =>
+      `<button type="button" class="small" data-section="operation-panel" data-table-target="operations" data-table-query="${esc(p.id)}">관련 작업 보기</button>${p.status === "DELIVERY_CLAIMED" && p.attention ? `<button type="button" class="small quiet" data-recovery-payment="${esc(p.id)}">복구 준비</button>` : ""}`,
+    empty: "진행 중인 결제가 없습니다.",
   });
 }
 const AUDIT_GROUPS: [string, string[]][] = [
@@ -1466,16 +1822,16 @@ async function refreshAdmin() {
   const runningOps = data.operations.filter(
     (o: any) => !["FINALIZED", "FAILED"].includes(o.status),
   ).length;
-  const stalledCount = data.payments.filter((p: any) =>
-    ["PAID", "DELIVERY_CLAIMED", "PROCESSING"].includes(p.status),
-  ).length;
-  const todo: [string, string, string, string, string][] = [
+  const payments = activePayments(data);
+  const stalledCount = payments.filter((p: any) => p.attention).length;
+  const todo: [string, string, string, string, string, string?][] = [
     [
       "review",
       "심사 대기 (운영자·게임)",
       `${reviewCount}건`,
       reviewCount ? "승인 또는 반려가 필요합니다" : "대기 중인 신청이 없습니다",
       reviewCount ? "pending" : "ok",
+      `data-section="${pendingApplications ? "application-review-panel" : "registration-review-panel"}"`,
     ],
     [
       "ops",
@@ -1483,13 +1839,17 @@ async function refreshAdmin() {
       `${failedOps}건`,
       runningOps ? `진행 중 ${runningOps}건` : "진행 중인 작업 없음",
       failedOps ? "failed" : "ok",
+      `data-section="operation-panel" data-table-target="operations" data-table-filter="${FAILED_OPERATIONS}"`,
     ],
     [
       "ops",
-      "지연된 결제",
+      "확인이 필요한 결제",
       `${stalledCount}건`,
-      stalledCount ? "아이템 지급 확인이 필요합니다" : "지연 결제 없음",
+      payments.length
+        ? `처리 중 ${payments.length - stalledCount}건`
+        : "진행 중인 결제 없음",
       stalledCount ? "pending" : "ok",
+      `data-section="payment-attention-panel" data-table-target="stalled-payments"${stalledCount ? ` data-table-filter="${ATTENTION_PAYMENTS}"` : ""}`,
     ],
     [
       "budget",
@@ -1499,10 +1859,12 @@ async function refreshAdmin() {
       a.solvent ? "ok" : "failed",
     ],
   ];
+  const priority: Record<string, number> = { failed: 0, pending: 1, ok: 2 };
+  todo.sort((a, b) => priority[a[4]] - priority[b[4]]);
   $("#admin-todo").innerHTML = todo
     .map(
-      ([tab, label, value, detail, tone]) =>
-        `<button type="button" class="todo-card ${tone}" data-goto="${tab}"><span>${label}</span><strong>${value}</strong><small>${detail}</small></button>`,
+      ([tab, label, value, detail, tone, target = ""]) =>
+        `<button type="button" class="todo-card ${tone}" data-goto="${tab}" ${target}><span>${label}</span><strong>${value}</strong><small>${detail}</small><span class="todo-arrow" aria-hidden="true">→</span></button>`,
     )
     .join("");
   setTabCount("review", reviewCount);
@@ -1521,12 +1883,9 @@ async function refreshAdmin() {
     ["결제 보관금", `${format(a.escrow)} CGC`],
     ["자금 보존", a.solvent ? "정상" : "확인 필요"],
   ]
-    .map(
-      ([label, value]) =>
-        `<div class="stat"><span>${label}</span><strong>${value}</strong></div>`,
-    )
+    .map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`)
     .join("");
-  renderOperations(data);
+  renderOperations(data, payments);
   renderAudit(data);
   renderAdminGames(data);
 }
@@ -1539,14 +1898,18 @@ async function mount() {
   show("#logout", true);
   const role = me.role as Role;
   $("#identity").textContent = ROLE_LABELS[role] ?? role;
+  $("#workspace-role").textContent = ROLE_LABELS[role] ?? role;
   $("#identity").className = `role-chip role-${role}`;
   document.body.dataset.role = role;
   for (const view of ["player", "operator", "admin"])
     show(`#${view}-view`, view === role);
   show("#wallet-tools", role !== "player");
+  $("#approval-wallet-title").textContent =
+    role === "operator"
+      ? "예치·인출 및 예외 환불에 서명하는 지갑"
+      : "환불 공동 승인에 서명하는 지갑";
   show("#resolution-panel", role !== "player");
-  // Operators have no ops tab; their payment recovery lives with the signer wallet.
-  $("#resolution-panel").dataset.tab = role === "admin" ? "ops" : "account";
+  $("#resolution-panel").dataset.tab = role === "admin" ? "ops" : "recovery";
   renderNav();
   show(
     "#local-key-label",
@@ -1564,6 +1927,7 @@ on("#wallet-login", "click", async () => {
   if (authBusy) return;
   authBusy = true;
   const attemptEpoch = sessionEpoch;
+  $("#login-feedback").classList.remove("feedback-error");
   $("#login-feedback").textContent =
     "지갑을 선택하고 로그인 메시지를 승인하세요.";
   try {
@@ -1592,7 +1956,8 @@ on("#wallet-login", "click", async () => {
     toast("지갑으로 로그인했습니다.");
   } catch (error) {
     $("#login-feedback").textContent = walletErrorMessage(error);
-    throw error;
+    $("#login-feedback").classList.add("feedback-error");
+    if ($("#login-view").classList.contains("hidden")) throw error;
   } finally {
     authBusy = false;
   }
@@ -1603,6 +1968,7 @@ on("#admin-setup", "submit", async (e) => {
   authBusy = true;
   const attemptEpoch = sessionEpoch;
   const form = e.currentTarget as HTMLFormElement;
+  $("#admin-setup-feedback").classList.remove("feedback-error");
   const setupCode = String(new FormData(form).get("setupCode") ?? "").trim();
   try {
     await connectWallet(
@@ -1635,7 +2001,8 @@ on("#admin-setup", "submit", async (e) => {
     );
   } catch (error) {
     $("#admin-setup-feedback").textContent = walletErrorMessage(error);
-    throw error;
+    $("#admin-setup-feedback").classList.add("feedback-error");
+    if ($("#login-view").classList.contains("hidden")) throw error;
   } finally {
     authBusy = false;
   }
@@ -1688,8 +2055,8 @@ async function resetWalletConnection() {
   ]);
   const feedback =
     (revoked
-      ? "로그인과 지갑 연결 권한을 초기화했습니다. 지갑으로 로그인을 눌러 처음부터 다시 연결하세요."
-      : "이 사이트의 로그인 상태를 초기화했습니다. 지갑 앱의 Settings → Connected dApps에서 localhost 연결을 해제한 뒤 다시 로그인하세요.") +
+      ? "로그인과 지갑 연결 권한을 초기화했습니다. 지갑 선택하기를 눌러 다시 연결하세요."
+      : `이 사이트의 로그인 상태를 초기화했습니다. 지갑 앱의 Settings → Connected dApps에서 ${location.host} 연결을 해제한 뒤 다시 로그인하세요.`) +
     (loggedOut ? "" : " 서버 세션 종료는 확인하지 못했습니다.");
   sessionStorage.setItem("metanomic-wallet-reset-feedback", feedback);
   location.reload();
@@ -1710,30 +2077,92 @@ on("#load-local-key", "click", () => {
   walletProvider = undefined;
   walletChainId = undefined;
   address = localAccount.address;
+  connectedWalletName = "로컬 테스트 지갑";
   ($("#local-key") as HTMLInputElement).value = "";
-  $("#signer-address").textContent = `승인 지갑: ${address}`;
+  renderSigningWallet();
   toast("로컬 승인 지갑이 연결됐습니다.");
 });
+const checkoutDialog = $<HTMLDialogElement>("#checkout");
+checkoutDialog.addEventListener("cancel", (e) => {
+  if ($<HTMLButtonElement>("#authorize-payment").disabled) e.preventDefault();
+});
 on("#authorize-payment", "click", async () => {
-  const pay = await api(`/payments/${currentPayment.paymentId}`);
-  const signature = await signTyped(pay.authorization);
-  const permitSignature = await signTyped(pay.permit);
-  const r = await api(`/payments/${pay.paymentId}/authorizations`, {
-    signature,
-    permitSignature,
-    permitDeadline: pay.expiresAt,
-  });
-  ($("#checkout") as HTMLDialogElement).close();
+  const feedback = $("#checkout-progress");
+  const close = $<HTMLButtonElement>("#checkout .close");
+  const epoch = sessionEpoch;
+  let operationId: string;
+  close.disabled = true;
+  feedback.classList.remove("feedback-error");
+  try {
+    feedback.textContent = "결제 상태를 확인하고 있습니다…";
+    const pay = await api(`/payments/${currentPayment.paymentId}`);
+    if (pay.status !== "CREATED")
+      throw new Error(
+        "결제 상태가 바뀌었습니다. 나의 활동에서 최신 상태를 확인하세요.",
+      );
+    feedback.textContent = "1/2 지갑 앱에서 결제 승인에 서명하세요.";
+    const signature = await signTyped(pay.authorization);
+    feedback.textContent = "2/2 지갑 앱에서 CGC 사용 승인에 서명하세요.";
+    const permitSignature = await signTyped(pay.permit);
+    feedback.textContent = "결제를 제출하고 있습니다…";
+    const result = await api(`/payments/${pay.paymentId}/authorizations`, {
+      signature,
+      permitSignature,
+      permitDeadline: pay.expiresAt,
+    });
+    operationId = result.operationId;
+  } catch (error) {
+    feedback.textContent = walletErrorMessage(error);
+    feedback.classList.add("feedback-error");
+    return;
+  } finally {
+    close.disabled = false;
+  }
+  if (epoch !== sessionEpoch) return;
+  checkoutDialog.close();
   toast("결제를 접수했습니다. 아이템 지급까지 진행 상태를 확인할 수 있습니다.");
-  await waitOperation(r.operationId);
   await refreshPlayer();
+  void waitOperation(operationId, false)
+    .then(() => {
+      if (epoch === sessionEpoch) return refreshPlayer();
+    })
+    .catch((error) => {
+      if (epoch === sessionEpoch) toast(walletErrorMessage(error), true);
+    });
+});
+function focusPageHeading() {
+  const heading = $(`#${me.role}-view .page-heading h1`);
+  heading.tabIndex = -1;
+  heading.focus({ preventScroll: true });
+  window.scrollTo({ top: 0 });
+}
+on("#workspace-menu", "click", () => {
+  setWorkspaceMenu(
+    $("#workspace-menu").getAttribute("aria-expanded") !== "true",
+  );
+});
+$(".workspace-sidebar").addEventListener("keydown", (e) => {
+  if (
+    e.key === "Escape" &&
+    $("#workspace-menu").getAttribute("aria-expanded") === "true"
+  ) {
+    setWorkspaceMenu(false);
+    $("#workspace-menu").focus();
+  }
 });
 $("#navigation").addEventListener("click", (e) => {
-  const tab = (e.target as HTMLElement).closest<HTMLElement>("[data-nav]");
-  if (tab) selectTab(tab.dataset.nav!);
+  const link = (e.target as HTMLElement).closest<HTMLAnchorElement>(
+    "[data-nav]",
+  );
+  if (!link || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  selectTab(link.dataset.nav!, true);
+  focusPageHeading();
 });
 window.addEventListener("hashchange", () => {
-  if (me) selectTab(location.hash.slice(1));
+  if (!me) return;
+  selectTab(location.hash.slice(1));
+  focusPageHeading();
 });
 // Step guides and summary cards point at existing controls instead of duplicating their logic.
 $("#workspace").addEventListener("click", (e) => {
@@ -1750,23 +2179,71 @@ $("#workspace").addEventListener("click", (e) => {
           true,
         ),
       );
+  const checkoutButton = (e.target as HTMLElement).closest<HTMLButtonElement>(
+    "[data-checkout]",
+  );
+  if (checkoutButton && !checkoutButton.disabled) {
+    checkoutButton.disabled = true;
+    void checkout(checkoutButton.dataset.checkout!)
+      .catch((error) => toast(walletErrorMessage(error), true))
+      .finally(() => {
+        checkoutButton.disabled = false;
+      });
+  }
   const trigger = (e.target as HTMLElement).closest<HTMLElement>(
-    "[data-goto], [data-step-click], [data-step-focus]",
+    "[data-goto], [data-step-click], [data-step-focus], [data-section], [data-recovery-payment]",
   );
   if (!trigger) return;
-  if (trigger.dataset.goto) {
-    selectTab(trigger.dataset.goto);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  const {
+    goto,
+    section,
+    operatorGameTarget,
+    tableTarget,
+    tableFilter,
+    tableQuery,
+    recoveryPayment,
+    budgetOpen,
+  } = trigger.dataset;
+  if (goto) selectTab(goto, true);
+  if (budgetOpen === "once") selectBudgetView("once", false);
+  if (operatorGameTarget) selectOperatorGame(operatorGameTarget);
+  if (tableTarget) {
+    const table = document.getElementById(tableTarget);
+    if (table) setTableView(table, tableFilter ?? "전체", tableQuery);
+  }
+  if (recoveryPayment) {
+    const form = $<HTMLFormElement>("#resolution-form");
+    const id = $<HTMLInputElement>("#resolution-form [name=paymentId]");
+    if (id.value !== recoveryPayment) form.reset();
+    id.value = recoveryPayment;
+    revealSection($("#resolution-panel"));
+  } else if (section) {
+    const panel = document.getElementById(section);
+    if (panel) revealSection(panel);
+  } else if (
+    operatorGameTarget &&
+    goto === "integration" &&
+    !trigger.dataset.stepFocus
+  ) {
+    const card = document.querySelector<HTMLElement>(
+      `[data-integration-game="${CSS.escape(operatorGameTarget)}"]`,
+    );
+    if (card) revealSection(card, true);
+  } else if (goto && !trigger.dataset.stepFocus) {
+    focusPageHeading();
   }
   if (trigger.dataset.stepClick)
     document.querySelector<HTMLElement>(trigger.dataset.stepClick)?.click();
   if (trigger.dataset.stepFocus) {
-    const field = document.querySelector<HTMLInputElement>(
+    const field = document.querySelector<HTMLElement>(
       trigger.dataset.stepFocus,
     );
-    field?.scrollIntoView({ behavior: "smooth", block: "center" });
-    field?.focus();
-    field?.select();
+    if (field) {
+      if (field.tabIndex < 0) field.tabIndex = -1;
+      field.focus({ preventScroll: true });
+      field.scrollIntoView({ block: "center" });
+      if (field instanceof HTMLInputElement) field.select();
+    }
   }
 });
 on("#refresh-player", "click", refreshPlayer);
@@ -1774,6 +2251,7 @@ on("#refresh-admin", "click", refreshAdmin);
 on("#refresh-operator", "click", refreshOperator);
 initAllocation({
   api,
+  confirm: showAction,
   toast,
   refresh: () => refreshAdmin(),
   assetId: () => asset.assetId,
@@ -1889,30 +2367,69 @@ $("#admin-view").addEventListener("click", (e) => {
     });
   else if (d.gameToggle) {
     const turnOn = d.active !== "1";
-    run(async () => {
-      await api(`/games/${d.gameToggle}`, { active: turnOn }, "PATCH");
-      toast(
-        turnOn
-          ? "게임을 켰습니다."
-          : "게임을 껐습니다. 새 결제와 보상이 막힙니다.",
-      );
-      await refreshAdmin();
-    });
+    const label = turnOn ? "포털에서 켜기" : "포털에서 끄기";
+    showAction(
+      label,
+      detailList([
+        ["게임", esc(d.name)],
+        [
+          "적용",
+          turnOn
+            ? "즉시 게임 목록에 공개하고 새 결제·보상을 허용합니다."
+            : "즉시 목록에서 숨기고 새 결제·보상을 중지합니다. 이미 접수된 지급과 환불은 계속 처리합니다.",
+        ],
+        [
+          "되돌리기",
+          turnOn
+            ? "[게임] 메뉴에서 포털을 다시 끌 수 있습니다."
+            : "[게임] 메뉴에서 포털을 다시 켤 수 있습니다.",
+        ],
+      ]),
+      label,
+      async () => {
+        await api(`/games/${d.gameToggle}`, { active: turnOn }, "PATCH");
+        toast(
+          turnOn
+            ? "게임을 켰습니다."
+            : "게임을 껐습니다. 새 결제와 보상이 막힙니다.",
+        );
+        void refreshAdmin().catch((error) =>
+          toast(walletErrorMessage(error), true),
+        );
+      },
+    );
   } else if (d.chainState) {
     const resume = d.active === "1";
-    if (
-      !confirm(
-        resume
-          ? `"${d.name}"의 재개를 블록체인 계약에 기록할까요?\n\n관리자 지갑이 거래 1건(약 0.002 RON)을 보냅니다. 포털 상태는 바뀌지 않으니 확정 후 [켜기]로 켜세요.`
-          : `"${d.name}"의 중지를 블록체인 계약에 기록할까요?\n\n확정되면 서버와 관계없이 계약이 새 결제·보상·배분을 거부하고, 포털도 꺼집니다. 되돌리려면 재개 기록 거래가 필요합니다. 관리자 지갑이 거래 1건(약 0.002 RON)을 보냅니다.`,
-      )
-    )
-      return;
-    run(async () => {
-      await api(`/games/${d.chainState}/chain-state`, { active: resume });
-      toast("블록체인 기록을 접수했습니다. 확정되면 상태가 바뀝니다.");
-      await refreshAdmin();
-    });
+    const label = resume ? "블록체인에서 재개" : "블록체인에서 중지";
+    showAction(
+      label,
+      detailList([
+        ["게임", esc(d.name)],
+        [
+          "적용",
+          resume
+            ? "확정되면 계약이 재개됩니다. 게임을 공개하려면 이후 포털에서 켜세요."
+            : "확정되면 계약이 새 결제·보상·배분을 차단하고 포털에서도 게임을 끕니다.",
+        ],
+        ["거래", "서버의 관리자 지갑이 거래 1건을 보내고 RON 수수료를 냅니다."],
+        [
+          "다음 단계",
+          resume
+            ? "[게임] 메뉴의 블록체인 상태가 재개되면 포털에서 켜세요."
+            : "[게임] 메뉴에서 블록체인 상태를 확인하세요. 되돌리려면 재개 거래가 필요합니다.",
+        ],
+      ]),
+      `${resume ? "재개" : "중지"} 거래 요청`,
+      async () => {
+        await api(`/games/${d.chainState}/chain-state`, { active: resume });
+        toast(
+          "거래를 접수했습니다. [게임] 메뉴에서 블록체인 상태를 확인하세요.",
+        );
+        void refreshAdmin().catch((error) =>
+          toast(walletErrorMessage(error), true),
+        );
+      },
+    );
   } else if (d.gameDelete) {
     if (
       !confirm(
@@ -1949,51 +2466,73 @@ on("#operator-application-form", "submit", async (e) => {
   );
   await refreshPlayer();
 });
-on("#issuance-target", "change", () => {
-  show(
-    "#issuance-operator-label",
-    $<HTMLSelectElement>("#issuance-target").value === "operator",
-  );
-});
-on("#issuance-form", "submit", (e) => {
-  e.preventDefault();
-  const form = Object.fromEntries(new FormData(e.currentTarget));
-  const toOperator = form.target === "operator";
-  if (toOperator && !form.operatorId)
-    throw new Error("지갑이 등록된 운영자가 없습니다.");
-  // One reference per preview, so a double-confirmed dialog cannot mint twice.
-  issuance = {
+on("#issuance-form", "input", renderIssuanceFeedback);
+on("#issuance-form", "submit", (event) => {
+  event.preventDefault();
+  const form = event.currentTarget as HTMLFormElement;
+  const fields = new FormData(form);
+  const amount = String(fields.get("amount") ?? "").trim();
+  const value = cgcUnits(amount);
+  const supply = cgcUnits(latestOverview?.accounting.totalSupply ?? "");
+  const cap = cgcUnits(latestOverview?.accounting.supplyCap ?? "");
+  if (
+    !value ||
+    supply === undefined ||
+    cap === undefined ||
+    supply + value > cap
+  )
+    return;
+  const toOperator = fields.get("target") === "operator";
+  const operator = toOperator
+    ? latestOverview.accounts.find(
+        (entry: any) => entry.id === fields.get("operatorId") && entry.wallet,
+      )
+    : undefined;
+  if (toOperator && !operator) return;
+
+  const issuanceRef = `issue-${randomUUID()}`;
+  const request = {
     assetId: asset.assetId,
-    amount: String(form.amount),
-    target: form.target,
-    ...(toOperator ? { operatorId: form.operatorId } : {}),
-    issuanceRef: `issue-${crypto.randomUUID()}`,
+    amount,
+    target: toOperator ? "operator" : "reserve",
+    ...(operator ? { operatorId: operator.id } : {}),
+    issuanceRef,
   };
-  const a = latestOverview?.accounting;
-  const target = toOperator
-    ? `운영자 지갑 · ${$<HTMLSelectElement>("#issuance-operator").selectedOptions[0]?.textContent ?? ""}`
-    : "네트워크 보유분";
-  const after = a
-    ? `${format(String(Number(a.totalSupply) + Number(issuance.amount)))} / ${format(a.supplyCap)} CGC`
-    : "—";
-  $("#issuance-details").innerHTML =
-    `<div class="activity-row"><span>대상</span><strong>${esc(target)}</strong></div><div class="activity-row"><span>발행 수량</span><strong>${esc(issuance.amount)} CGC</strong></div><div class="activity-row"><span>발행 후 총발행량</span><strong>${esc(after)}</strong></div><div class="activity-row"><span>거래</span><strong>${toOperator ? "발행 1건" : "발행 → 충전 승인 → 보유분 입금 3건"}</strong></div>`;
-  $<HTMLDialogElement>("#issuance-dialog").showModal();
-});
-on("#cancel-issuance", "click", () =>
-  $<HTMLDialogElement>("#issuance-dialog").close(),
-);
-on("#confirm-issuance", "click", async () => {
-  const r = await api("/issuances", issuance);
-  $<HTMLDialogElement>("#issuance-dialog").close();
-  toast(
-    issuance.target === "reserve"
-      ? "발행을 접수했습니다. 보유분 입금까지 거래 3건이 차례로 확정됩니다."
-      : "발행을 접수했습니다. 확정되면 운영자 지갑에 CGC가 들어갑니다.",
+  showAction(
+    "발행 내용을 확인하세요",
+    detailList([
+      [
+        "받을 곳",
+        operator
+          ? `운영자 지갑 · ${esc(operator.username)}`
+          : "네트워크 보유분",
+      ],
+      ["지갑 주소", operator ? `<code>${esc(operator.wallet)}</code>` : ""],
+      ["발행 수량", `${cgcLabel(value)} CGC`],
+      [
+        "발행 후 총발행량",
+        `${cgcLabel(supply + value)} / ${cgcLabel(cap)} CGC`,
+      ],
+      [
+        "적용",
+        operator
+          ? "거래가 확정되면 운영자 지갑에 들어갑니다."
+          : "거래 3건이 차례로 확정되면 배분 가능한 보유분에 합쳐집니다.",
+      ],
+      ["확인", "발행한 수량은 되돌릴 수 없습니다."],
+    ]),
+    "CGC 발행 실행",
+    async () => {
+      await api("/issuances", request, "POST", issuanceRef);
+      (form.elements.namedItem("amount") as HTMLInputElement).value = "";
+      renderIssuanceFeedback();
+      $("#issuance-records").setAttribute("open", "");
+      toast("CGC 발행을 접수했습니다. 발행 기록에서 진행 상태를 확인하세요.");
+      void refreshAdmin().catch(() =>
+        toast("발행은 접수됐습니다. 새로고침해 기록을 확인하세요."),
+      );
+    },
   );
-  await refreshAdmin();
-  await waitOperation(r.operationId);
-  await refreshAdmin();
 });
 $("#operator-view").addEventListener("click", (e) => {
   const target = e.target as HTMLElement;
@@ -2091,7 +2630,8 @@ async function boot() {
   if (resetFeedback) {
     $("#login-feedback").textContent = resetFeedback;
     sessionStorage.removeItem("metanomic-wallet-reset-feedback");
-  }
+  } else
+    $("#login-feedback").textContent = "로그인에는 가스비가 들지 않습니다.";
   const d = asset?.deployments.find(
     (d: any) => d.id === asset.activeDeploymentId,
   );
@@ -2099,8 +2639,16 @@ async function boot() {
     d?.finality === "local" ? "LOCAL TESTNET" : "SAIGON TESTNET";
   if (token) await mount();
 }
+on("#retry-login-load", "click", () => location.reload());
 void boot().catch((e) => {
-  toast(e.message, true);
+  if ($("#login-view").classList.contains("hidden")) {
+    toast(e.message, true);
+    return;
+  }
+  $("#login-feedback").textContent =
+    "서버 연결을 확인하지 못했습니다. 잠시 후 페이지를 다시 불러오세요.";
+  $("#login-feedback").classList.add("feedback-error");
+  show("#retry-login-load", true);
 });
 setInterval(() => {
   if (

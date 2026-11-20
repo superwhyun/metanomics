@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Metanomic 결제</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar"><span class="brand">Metanomic</span></header>
+    <main class="checkout">
+      <section class="panel" aria-labelledby="checkout-title">
+        <span class="eyebrow" id="checkout-game">결제</span>
+        <h1 id="checkout-title">결제 내용을 불러오는 중</h1>
+        <dl class="checkout-summary" id="checkout-summary" hidden>
+          <div>
+            <dt>상품</dt>
+            <dd id="checkout-item"></dd>
+          </div>
+          <div>
+            <dt>결제 금액</dt>
+            <dd><strong id="checkout-amount"></strong> CGC</dd>
+          </div>
+          <div>
+            <dt>결제 지갑</dt>
+            <dd><code id="checkout-payer"></code></dd>
+          </div>
+          <div>
+            <dt>유효 기간</dt>
+            <dd id="checkout-expiry"></dd>
+          </div>
+        </dl>
+        <p class="muted" id="checkout-note" hidden>
+          지갑에서 서명 두 번을 요청합니다. 첫 번째는 이 주문의 결제 승인, 두
+          번째는 결제 금액만큼의 CGC 사용 승인입니다. 가스비는 들지 않으며
+          거래는 Metanomic이 제출합니다.
+        </p>
+        <div id="checkout-wallets" class="actions"></div>
+        <p id="checkout-status" role="status" aria-live="polite"></p>
+        <div class="actions">
+          <button type="button" class="quiet" id="checkout-cancel" hidden>
+            결제하지 않고 게임으로 돌아가기
+          </button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/checkout.js"></script>
+  </body>
+</html>

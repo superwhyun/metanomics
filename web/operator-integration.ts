@@ -4,9 +4,21 @@ export type GameCredential = {
   scopes: string[];
   createdAt?: number;
 };
+export type GameWebhook = {
+  webhookId: string;
+  url: string;
+  label: string;
+  pendingEvents: number;
+  failures: number;
+  lastStatus: number | null;
+  lastError: string | null;
+  lastDeliveredAt: number | null;
+};
+type CreatedWebhook = GameWebhook & { secret: string };
 type IntegrationGame = {
   game: { id: string; name: string };
   credentials: GameCredential[];
+  webhooks?: GameWebhook[];
 };
 type IssuedCredential = {
   credentialId: string;
@@ -20,6 +32,20 @@ type Options = {
   guideUrl: string;
   issue(gameId: string, label: string): Promise<IssuedCredential>;
   revoke(gameId: string, credentialId: string): Promise<void>;
+  createWebhook(
+    gameId: string,
+    url: string,
+    label: string,
+  ): Promise<CreatedWebhook>;
+  testWebhook(
+    gameId: string,
+    webhookId: string,
+  ): Promise<{
+    delivered: boolean;
+    status: number | null;
+    error: string | null;
+  }>;
+  deleteWebhook(gameId: string, webhookId: string): Promise<void>;
   feedback(message: string, error?: boolean): void;
 };
 
@@ -99,11 +125,7 @@ export function renderOperatorIntegration(
     const empty = node("article", undefined, "panel empty-state");
     empty.append(
       node("h2", "승인된 게임이 아직 없습니다"),
-      node(
-        "p",
-        "게임 등록과 관리자 승인이 끝나면 API 주소·게임 ID·API 키를 여기서 확인할 수 있습니다.",
-        "muted",
-      ),
+      node("p", "게임이 승인되면 여기서 API 키를 발급합니다.", "muted"),
     );
     const register = node("button", "게임 등록 신청하기 →", "primary");
     register.type = "button";
@@ -112,7 +134,178 @@ export function renderOperatorIntegration(
     container.append(empty);
     return;
   }
-  for (const { game, credentials } of games) {
+  // Webhooks are optional: polling stays the recovery path, so a game can add
+  // them at any time without changing how it completes payments.
+  const renderWebhooks = (gameId: string, initial: GameWebhook[]) => {
+    const section = node("section", undefined, "connection-key");
+    section.dataset.webhooks = gameId;
+    section.append(
+      node("h3", "웹훅 (선택)"),
+      node(
+        "p",
+        "결제·보상 상태 변경을 즉시 알립니다. 주기 조회는 유지하세요.",
+        "muted",
+      ),
+    );
+    const created = node("div", undefined, "connection-issued");
+    const list = node("div", undefined, "connection-credentials");
+    const records = [...initial];
+    const describe = (hook: GameWebhook) =>
+      hook.failures
+        ? `전송 실패 ${hook.failures}회 · ${hook.lastError ?? "응답 없음"} · 대기 이벤트 ${hook.pendingEvents}개 (자동 재시도)`
+        : hook.lastDeliveredAt
+          ? `정상 · 마지막 전송 ${new Date(hook.lastDeliveredAt).toLocaleString("ko-KR")}${hook.pendingEvents ? ` · 대기 ${hook.pendingEvents}개` : ""}`
+          : "아직 전송한 이벤트가 없습니다.";
+    const renderList = () => {
+      list.replaceChildren();
+      if (!records.length) {
+        list.append(node("p", "등록된 웹훅이 없습니다.", "muted"));
+        return;
+      }
+      for (const hook of records) {
+        const row = node("div", undefined, "activity-row");
+        row.dataset.webhook = hook.webhookId;
+        const description = node("div");
+        description.append(
+          node("strong", hook.label),
+          node("small", hook.url),
+          node("small", describe(hook), hook.failures ? "warn" : undefined),
+        );
+        const actions = node("div", undefined, "actions");
+        const test = node("button", "테스트 전송", "quiet small");
+        test.type = "button";
+        test.addEventListener("click", async () => {
+          test.disabled = true;
+          try {
+            const result = await options.testWebhook(gameId, hook.webhookId);
+            options.feedback(
+              result.delivered
+                ? `테스트 이벤트 전송 성공 (HTTP ${result.status})`
+                : `테스트 이벤트 전송 실패: ${result.error ?? "응답 없음"}`,
+              !result.delivered,
+            );
+          } catch (error) {
+            options.feedback(
+              error instanceof Error ? error.message : "전송하지 못했습니다.",
+              true,
+            );
+          } finally {
+            test.disabled = false;
+          }
+        });
+        const remove = node("button", "삭제", "quiet small");
+        remove.type = "button";
+        let armed = false;
+        remove.addEventListener("click", async () => {
+          if (!armed) {
+            armed = true;
+            remove.textContent = "정말 삭제";
+            remove.classList.add("danger");
+            return;
+          }
+          remove.disabled = true;
+          try {
+            await options.deleteWebhook(gameId, hook.webhookId);
+            records.splice(records.indexOf(hook), 1);
+            renderList();
+            options.feedback("웹훅을 삭제했습니다.");
+          } catch (error) {
+            options.feedback(
+              error instanceof Error ? error.message : "삭제하지 못했습니다.",
+              true,
+            );
+            remove.disabled = false;
+          }
+        });
+        actions.append(test, remove);
+        row.append(description, actions);
+        list.append(row);
+      }
+    };
+    const add = node("button", "웹훅 등록", "small");
+    add.type = "button";
+    add.addEventListener("click", () => {
+      created.replaceChildren();
+      const form = node("form", undefined, "credential-form");
+      const urlLabel = node("label", "받을 주소");
+      const url = node("input");
+      url.name = "url";
+      url.type = "url";
+      url.required = true;
+      url.placeholder = "https://game.example.com/metanomic/webhook";
+      urlLabel.append(url);
+      const nameLabel = node("label", "웹훅 이름");
+      const name = node("input");
+      name.name = "label";
+      name.required = true;
+      name.maxLength = 60;
+      name.value = "게임 서버";
+      nameLabel.append(name);
+      const submit = node("button", "등록", "primary");
+      submit.type = "submit";
+      const cancel = node("button", "취소", "quiet");
+      cancel.type = "button";
+      cancel.addEventListener("click", () => created.replaceChildren());
+      form.append(urlLabel, nameLabel, submit, cancel);
+      created.append(form);
+      url.focus();
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        submit.disabled = cancel.disabled = true;
+        try {
+          const hook = await options.createWebhook(
+            gameId,
+            url.value.trim(),
+            name.value.trim(),
+          );
+          const { secret, ...record } = hook;
+          records.unshift(record);
+          renderList();
+          created.replaceChildren(
+            node("h4", `${hook.label} · 등록 완료`),
+            node(
+              "p",
+              "서명 비밀값은 지금 한 번만 표시됩니다. 게임 서버의 METANOMIC_WEBHOOK_SECRET에 보관하고, 요청마다 Metanomic-Signature 헤더를 검증하세요.",
+              "muted",
+            ),
+          );
+          const value = node("input");
+          value.type = "text";
+          value.readOnly = true;
+          value.value = secret;
+          value.setAttribute("aria-label", "웹훅 서명 비밀값");
+          value.autocomplete = "off";
+          value.spellcheck = false;
+          const actions = node("div", undefined, "actions");
+          const hide = node("button", "보관 완료 · 화면에서 숨기기", "quiet");
+          hide.type = "button";
+          hide.addEventListener("click", () => created.replaceChildren());
+          actions.append(
+            copyButton(secret, "서명 비밀값"),
+            copyButton(
+              `METANOMIC_WEBHOOK_SECRET=${JSON.stringify(secret)}`,
+              "환경 변수",
+              "환경 변수 복사",
+            ),
+            hide,
+          );
+          created.append(value, actions);
+        } catch (error) {
+          options.feedback(
+            error instanceof Error
+              ? error.message
+              : "웹훅을 등록하지 못했습니다.",
+            true,
+          );
+          submit.disabled = cancel.disabled = false;
+        }
+      });
+    });
+    renderList();
+    section.append(add, created, list);
+    return section;
+  };
+  for (const { game, credentials, webhooks } of games) {
     const card = node("article", undefined, "panel integration-card");
     card.dataset.integrationGame = game.id;
     card.setAttribute("aria-label", game.name);
@@ -121,10 +314,7 @@ export function renderOperatorIntegration(
     title.append(node("span", game.id, "eyebrow"), node("h2", game.name));
     const count = node("span", undefined, "pill");
     heading.append(title, count);
-    card.append(
-      heading,
-      node("p", "아래 세 값을 게임 서버의 환경 변수에 설정하세요.", "muted"),
-    );
+    card.append(heading);
     const fields = node("div", undefined, "connection-fields");
     fields.append(
       field("API 주소", "METANOMIC_API_URL", options.apiUrl),
@@ -136,7 +326,7 @@ export function renderOperatorIntegration(
       card.append(
         node(
           "p",
-          "이 주소는 같은 컴퓨터에서 실행하는 게임 서버용입니다. 다른 컴퓨터에서는 접근 가능한 Metanomic 서버 주소를 사용하세요.",
+          "같은 컴퓨터의 게임 서버 전용 주소입니다.",
           "muted connection-note",
         ),
       );
@@ -146,7 +336,7 @@ export function renderOperatorIntegration(
       node("code", "METANOMIC_GAME_KEY", "connection-variable"),
       node(
         "p",
-        "키 값은 발급 직후 한 번만 표시됩니다. 게임 서버에 보관하고, 브라우저 코드에는 넣지 마세요.",
+        "키는 발급 직후 한 번만 표시됩니다. 서버에만 보관하세요.",
         "muted",
       ),
     );
@@ -167,14 +357,7 @@ export function renderOperatorIntegration(
         list.append(node("p", "아직 발급한 API 키가 없습니다.", "muted"));
         return;
       }
-      list.append(
-        node("h4", "발급된 키"),
-        node(
-          "p",
-          "기존 키 값은 다시 볼 수 없습니다. 분실했다면 새 키로 게임 서버 설정을 바꾼 뒤 기존 키를 폐기하세요.",
-          "muted",
-        ),
-      );
+      list.append(node("h4", "발급된 키"));
       for (const credential of records) {
         const row = node("div", undefined, "activity-row");
         const description = node("div");
@@ -189,7 +372,7 @@ export function renderOperatorIntegration(
               new Date(credential.createdAt).toLocaleString("ko-KR"),
             ),
           );
-        const revoke = node("button", "폐기", "quiet");
+        const revoke = node("button", "폐기", "small danger");
         revoke.type = "button";
         let armed = false;
         revoke.addEventListener("click", async () => {
@@ -238,11 +421,7 @@ export function renderOperatorIntegration(
       issued.replaceChildren();
       issued.append(
         node("h4", `${result.label} · 발급 완료`),
-        node(
-          "p",
-          "이 화면을 새로고침하면 키 값은 다시 볼 수 없습니다. 아래 설정을 게임 서버에 보관하세요.",
-          "muted",
-        ),
+        node("p", "새로고침하면 다시 볼 수 없습니다.", "muted"),
       );
       const secret = node("input");
       secret.type = "text";
@@ -270,7 +449,7 @@ export function renderOperatorIntegration(
         actions,
         node(
           "p",
-          ".env를 자동으로 읽는 게임 서버는 환경 변수 설정을 저장하세요. 자동으로 읽지 않으면 실행 명령을 사용하세요. 실행 명령은 macOS/Linux의 npm run dev 기준이며 게임 프로젝트 폴더에서 실행합니다.",
+          ".env에 저장하거나 실행 명령(macOS/Linux, npm run dev)을 사용하세요.",
           "muted",
         ),
       );
@@ -342,12 +521,14 @@ export function renderOperatorIntegration(
     });
     renderRecords();
     keySection.append(issueButton, issued, list);
+    const hookSection = renderWebhooks(game.id, webhooks ?? []);
     card.append(
       keySection,
+      hookSection,
       preview,
       node(
         "p",
-        "API 키 발급만으로 게임 서버가 연결되지는 않습니다. 세 값을 설정하고 게임 서버를 재시작한 뒤, 게임 쪽 연결 상태와 사용 가능 예산을 확인하세요.",
+        "API 키 발급만으로 게임 서버가 연결되지는 않습니다. 세 값을 설정하고 서버를 재시작하세요.",
         "connection-next",
       ),
     );

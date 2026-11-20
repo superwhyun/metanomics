@@ -112,9 +112,15 @@ export function renderAccountChoices(
 export function renderLoginWallets(
   container: HTMLElement,
   wallets: NamedWallet[],
-  save: (wallet: NamedWallet) => Promise<void>,
-  feedback: (message: string, error?: boolean) => void,
+  loginAddress: string | null,
+  save: (wallet: NamedWallet) => Promise<NamedWallet>,
 ) {
+  const expanded = new Set(
+    Array.from(
+      container.querySelectorAll<HTMLDetailsElement>("details[open]"),
+      (row) => row.dataset.walletAddress,
+    ),
+  );
   container.replaceChildren();
   if (!wallets.length) {
     container.textContent =
@@ -122,14 +128,28 @@ export function renderLoginWallets(
     return;
   }
   for (const wallet of wallets) {
+    const row = document.createElement("details");
+    row.className = "login-wallet-row";
+    row.dataset.walletAddress = wallet.address;
+    row.open = expanded.has(wallet.address);
+    const summary = document.createElement("summary");
+    const heading = document.createElement("strong");
+    heading.textContent = wallet.alias ?? "별명 없음";
+    const abbreviated = document.createElement("code");
+    abbreviated.textContent = `${wallet.address.slice(0, 7)}…${wallet.address.slice(-5)}`;
+    summary.append(heading, abbreviated);
+    if (wallet.address.toLowerCase() === loginAddress?.toLowerCase()) {
+      const active = document.createElement("span");
+      active.className = "login-wallet-active";
+      active.textContent = "현재 로그인";
+      summary.append(active);
+    }
     const form = document.createElement("form");
     form.className = "login-wallet-alias";
-    const heading = document.createElement("strong");
-    heading.textContent = wallet.alias ?? "이름 미등록";
     const full = document.createElement("code");
     full.textContent = wallet.address;
     const label = document.createElement("label");
-    label.textContent = "사이트 별명 (40자 이내)";
+    label.textContent = "Metanomic에서 사용할 별명";
     const input = document.createElement("input");
     input.type = "text";
     input.maxLength = WALLET_ALIAS_MAX_LENGTH;
@@ -147,29 +167,34 @@ export function renderLoginWallets(
     remove.className = "quiet";
     remove.textContent = "별명 삭제";
     remove.disabled = wallet.alias === null;
+    const feedback = document.createElement("p");
+    feedback.className = "muted operation-feedback";
+    feedback.setAttribute("role", "status");
+    let currentAlias = wallet.alias;
     let busy = false;
     const persist = async (alias: string | null) => {
       if (busy) return;
       busy = true;
       submit.disabled = remove.disabled = input.disabled = true;
+      feedback.classList.remove("feedback-error");
       try {
-        await save({ address: wallet.address, alias });
-        feedback(
-          alias
-            ? "별명을 저장했습니다."
-            : "별명을 삭제했습니다. 지갑 등록은 유지됩니다.",
-        );
+        const saved = await save({ address: wallet.address, alias });
+        currentAlias = saved.alias;
+        input.value = currentAlias ?? "";
+        heading.textContent = currentAlias ?? "별명 없음";
+        feedback.textContent = currentAlias
+          ? "별명을 저장했습니다."
+          : "별명을 삭제했습니다.";
       } catch (error) {
-        feedback(
+        feedback.textContent =
           error instanceof Error
             ? error.message
-            : "별명을 저장하지 못했습니다.",
-          true,
-        );
+            : "별명을 저장하지 못했습니다.";
+        feedback.classList.add("feedback-error");
       } finally {
         busy = false;
         submit.disabled = input.disabled = false;
-        remove.disabled = wallet.alias === null;
+        remove.disabled = currentAlias === null;
       }
     };
     form.addEventListener("submit", (event) => {
@@ -178,7 +203,8 @@ export function renderLoginWallets(
     });
     remove.addEventListener("click", () => void persist(null));
     actions.append(submit, remove);
-    form.append(heading, full, label, actions);
-    container.append(form);
+    form.append(full, label, actions, feedback);
+    row.append(summary, form);
+    container.append(row);
   }
 }
